@@ -1,0 +1,7 @@
+.env
+*.log
+apify_runs.log
+/etc/letsencrypt
+postgres_data/
+n8n_data/
+.DS_Store
