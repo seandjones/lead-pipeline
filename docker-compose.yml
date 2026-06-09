@@ -43,6 +43,7 @@ services:
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE: 336
       GENERIC_TIMEZONE: America/Denver
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       # Pass through API keys for use in Function nodes via $env
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
       AIRTABLE_API_KEY: ${AIRTABLE_API_KEY}
