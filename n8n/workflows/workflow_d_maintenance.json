@@ -4,12 +4,7 @@
     {
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "cronExpression",
-              "expression": "0 23 * * 0"
-            }
-          ]
+          "interval": [{ "field": "cronExpression", "expression": "0 23 * * 0" }]
         }
       },
       "id": "node_schedule",
@@ -20,17 +15,13 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            {
-              "name": "filterByFormula",
-              "value": "=AND(OR({status}='Raw',{status}='Scored'),IS_BEFORE({date_added},DATEADD(TODAY(),-60,'days')))"
-            },
+            { "name": "filterByFormula", "value": "AND(OR({status}='Raw',{status}='Scored'),IS_BEFORE({date_added},DATEADD(TODAY(),-60,'days')))" },
             { "name": "fields[]", "value": "business_name" },
             { "name": "fields[]", "value": "status" },
             { "name": "fields[]", "value": "date_added" }
@@ -44,15 +35,12 @@
       "typeVersion": 4,
       "position": [420, 300],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
+        "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
     },
     {
       "parameters": {
-        "jsCode": "const records = $input.item.json.records || [];\nconsole.log(`Found ${records.length} stale records to archive`);\nreturn records.map(r => ({ json: { record_id: r.id, business_name: r.fields.business_name } }));"
+        "jsCode": "const records = $input.item.json.records || [];\nconsole.log(`Found ${records.length} stale records to archive`);\nif (records.length === 0) return [];\nreturn records.map(r => ({ json: { record_id: r.id, business_name: r.fields.business_name } }));"
       },
       "id": "node_split_stale",
       "name": "Split Stale Records",
@@ -63,14 +51,13 @@
     {
       "parameters": {
         "method": "PATCH",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}/{{ $json.record_id }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendBody": true,
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "{\"fields\": {\"status\": \"Archived\"}}"
-        }
+        "specifyBody": "json",
+        "jsonBody": "{\"fields\": {\"status\": \"Archived\"}}",
+        "options": {}
       },
       "id": "node_archive_record",
       "name": "Archive Stale Record",
@@ -78,18 +65,14 @@
       "typeVersion": 4,
       "position": [860, 300],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
+        "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -105,18 +88,14 @@
       "typeVersion": 4,
       "position": [1080, 160],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
+        "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -132,25 +111,18 @@
       "typeVersion": 4,
       "position": [1080, 300],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
+        "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            {
-              "name": "filterByFormula",
-              "value": "AND({status}='Pushed',IS_AFTER({date_pushed},DATEADD(TODAY(),-7,'days')))"
-            },
+            { "name": "filterByFormula", "value": "AND({status}='Pushed',IS_AFTER({date_pushed},DATEADD(TODAY(),-7,'days')))" },
             { "name": "fields[]", "value": "ai_score" },
             { "name": "fields[]", "value": "status" }
           ]
@@ -163,18 +135,14 @@
       "typeVersion": 4,
       "position": [1080, 440],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
+        "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -190,49 +158,33 @@
       "typeVersion": 4,
       "position": [1080, 580],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
+        "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
     },
     {
       "parameters": {
-        "mode": "combine",
-        "combinationMode": "mergeByIndex",
-        "options": {}
-      },
-      "id": "node_merge_counts",
-      "name": "Merge Stats",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 2,
-      "position": [1300, 370]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Gather all stat responses\n// In n8n these arrive as separate items — build the summary from all items\nconst allItems = $input.all();\n\n// We expect: [raw_resp, scored_resp, pushed_week_resp, archived_resp]\n// Each item has .json.records\nconst rawCount = allItems[0]?.json?.records?.length ?? 0;\nconst scoredCount = allItems[1]?.json?.records?.length ?? 0;\nconst pushedWeekRecords = allItems[2]?.json?.records ?? [];\nconst archivedCount = allItems[3]?.json?.records?.length ?? 0;\nconst pushedWeekCount = pushedWeekRecords.length;\n\nconst avgScore = pushedWeekRecords.length > 0\n  ? (pushedWeekRecords.reduce((sum, r) => sum + (r.fields?.ai_score || 0), 0) / pushedWeekRecords.length).toFixed(1)\n  : 'N/A';\n\nconst slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) {\n  console.log('Slack not configured — skipping weekly report');\n  return [{ json: { skipped: true } }];\n}\n\nconst msg = `📊 *Weekly Pipeline Report*\\nRaw (unprocessed): ${rawCount}\\nScored: ${scoredCount}\\nPushed to CRM this week: ${pushedWeekCount}\\nArchived: ${archivedCount}\\nAvg score of pushed leads (this week): ${avgScore}/10`;\n\nreturn [{ json: { slackUrl, slackBody: { text: msg } } }];"
+        "jsCode": "// Count nodes run sequentially: Raw → Scored → Pushed → Archived → here.\n// $input.item.json is Count Archived's response; the others are referenced by node name.\nconst rawCount     = ($('Count Raw').item.json.records || []).length;\nconst scoredCount  = ($('Count Scored').item.json.records || []).length;\nconst pushedWeekRecords = $('Count Pushed This Week').item.json.records || [];\nconst archivedCount = ($input.item.json.records || []).length;\n\nconst pushedWeekCount = pushedWeekRecords.length;\nconst avgScore = pushedWeekCount > 0\n  ? (pushedWeekRecords.reduce((sum, r) => sum + (r.fields?.ai_score || 0), 0) / pushedWeekCount).toFixed(1)\n  : 'N/A';\n\nconst slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) {\n  console.log('Slack not configured — skipping weekly report');\n  return [{ json: { skipped: true } }];\n}\n\nconst msg = `📊 *Weekly Pipeline Report*\\nRaw (unprocessed): ${rawCount}\\nScored: ${scoredCount}\\nPushed to CRM this week: ${pushedWeekCount}\\nArchived: ${archivedCount}\\nAvg score of pushed leads (this week): ${avgScore}/10`;\nreturn [{ json: { slackUrl, slackBody: { text: msg } } }];"
       },
       "id": "node_build_report",
       "name": "Build Weekly Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1520, 370]
+      "position": [1300, 440]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "={{ $json.slackUrl }}",
         "sendBody": true,
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "={{ JSON.stringify($json.slackBody) }}"
-        }
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
       },
       "id": "node_slack_report",
       "name": "Slack — Weekly Report",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1740, 370]
+      "position": [1520, 440]
     },
     {
       "parameters": {},
@@ -244,7 +196,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: {\n  slackUrl,\n  slackBody: { text: `🚨 *Workflow D Error*\\n${err.execution?.error?.message || 'Unknown error'}` }\n}}];"
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *Workflow D Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
       },
       "id": "node_error_format",
       "name": "Format Error",
@@ -257,10 +209,9 @@
         "method": "POST",
         "url": "={{ $json.slackUrl }}",
         "sendBody": true,
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "={{ JSON.stringify($json.slackBody) }}"
-        }
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
       },
       "id": "node_error_slack",
       "name": "Slack — Error Alert",
@@ -271,56 +222,23 @@
   ],
   "connections": {
     "Schedule — Sunday 11pm": {
-      "main": [[{ "node": "Fetch Stale Records (60+ days)", "type": "main", "index": 0 }]]
+      "main": [[
+        { "node": "Fetch Stale Records (60+ days)", "type": "main", "index": 0 },
+        { "node": "Count Raw", "type": "main", "index": 0 }
+      ]]
     },
-    "Fetch Stale Records (60+ days)": {
-      "main": [[{ "node": "Split Stale Records", "type": "main", "index": 0 }]]
-    },
-    "Split Stale Records": {
-      "main": [[{ "node": "Archive Stale Record", "type": "main", "index": 0 }]]
-    },
-    "Archive Stale Record": {
-      "main": [
-        [{ "node": "Count Raw", "type": "main", "index": 0 }],
-        [{ "node": "Count Scored", "type": "main", "index": 0 }],
-        [{ "node": "Count Pushed This Week", "type": "main", "index": 0 }],
-        [{ "node": "Count Archived", "type": "main", "index": 0 }]
-      ]
-    },
-    "Count Raw": {
-      "main": [[{ "node": "Merge Stats", "type": "main", "index": 0 }]]
-    },
-    "Count Scored": {
-      "main": [[{ "node": "Merge Stats", "type": "main", "index": 1 }]]
-    },
-    "Count Pushed This Week": {
-      "main": [[{ "node": "Merge Stats", "type": "main", "index": 2 }]]
-    },
-    "Count Archived": {
-      "main": [[{ "node": "Merge Stats", "type": "main", "index": 3 }]]
-    },
-    "Merge Stats": {
-      "main": [[{ "node": "Build Weekly Report", "type": "main", "index": 0 }]]
-    },
-    "Build Weekly Report": {
-      "main": [[{ "node": "Slack — Weekly Report", "type": "main", "index": 0 }]]
-    },
-    "Error Trigger": {
-      "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]]
-    },
-    "Format Error": {
-      "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]]
-    }
+    "Fetch Stale Records (60+ days)": { "main": [[{ "node": "Split Stale Records", "type": "main", "index": 0 }]] },
+    "Split Stale Records": { "main": [[{ "node": "Archive Stale Record", "type": "main", "index": 0 }]] },
+    "Count Raw":           { "main": [[{ "node": "Count Scored",           "type": "main", "index": 0 }]] },
+    "Count Scored":        { "main": [[{ "node": "Count Pushed This Week", "type": "main", "index": 0 }]] },
+    "Count Pushed This Week": { "main": [[{ "node": "Count Archived",      "type": "main", "index": 0 }]] },
+    "Count Archived":      { "main": [[{ "node": "Build Weekly Report",    "type": "main", "index": 0 }]] },
+    "Build Weekly Report": { "main": [[{ "node": "Slack — Weekly Report",  "type": "main", "index": 0 }]] },
+    "Error Trigger": { "main": [[{ "node": "Format Error",   "type": "main", "index": 0 }]] },
+    "Format Error":  { "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]] }
   },
-  "active": true,
-  "settings": {
-    "executionOrder": "v1",
-    "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner"
-  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
   "tags": ["lead-pipeline", "maintenance"],
-  "meta": {
-    "templateCredsSetupCompleted": false,
-    "instanceId": ""
-  }
+  "meta": { "templateCredsSetupCompleted": false, "instanceId": "" }
 }

@@ -1,87 +1,110 @@
 {
-  "name": "Workflow A — Ingest & Validate",
+  "name": "workflow_a_ingestion",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
         "path": "apify-webhook",
-        "responseMode": "onReceived",
-        "responseData": "noData",
         "options": {
           "rawBody": true
         }
       },
-      "id": "node_webhook",
+      "id": "079cc255-4db3-4186-b387-1ead8d85b589",
       "name": "Webhook — Apify POST",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [200, 300],
+      "position": [
+        -2416,
+        208
+      ],
       "webhookId": "apify-ingest-webhook"
     },
     {
       "parameters": {
-        "jsCode": "// Validate shared secret\nconst secret = $input.item.json.headers?.['x-webhook-secret'];\nconst expectedSecret = $env.WEBHOOK_SECRET;\nif (secret !== expectedSecret) {\n  throw new Error('Invalid webhook secret — request rejected');\n}\n\n// Parse body\nconst body = typeof $input.item.json.body === 'string'\n  ? JSON.parse($input.item.json.body)\n  : $input.item.json.body;\n\n// Only process successful runs\nif (body.eventType !== 'ACTOR.RUN.SUCCEEDED') {\n  console.log(`Ignoring event type: ${body.eventType}`);\n  return [];\n}\n\nconst datasetId = body.resource?.defaultDatasetId;\nconst apifyRunId = body.resource?.id;\n\nif (!datasetId) {\n  throw new Error('No defaultDatasetId in Apify webhook payload');\n}\n\nreturn [{ json: { datasetId, apifyRunId } }];"
+        "jsCode": "// Body parsing — no secret check here, Webhook node handles that\nlet body = $input.item.json.body || $input.item.json;\nif (typeof body === 'string') {\n  try { body = JSON.parse(body); } catch(e) { throw new Error('Could not parse body as JSON'); }\n}\n\nif (body.eventType !== 'ACTOR.RUN.SUCCEEDED') {\n  console.log(`Ignoring event type: ${body.eventType}`);\n  return [];\n}\n\nconst datasetId = body.resource?.defaultDatasetId;\nconst apifyRunId = body.resource?.id;\n\nif (!datasetId) {\n  throw new Error('No defaultDatasetId in Apify webhook payload');\n}\n\nreturn [{ json: { datasetId, apifyRunId } }];"
       },
-      "id": "node_extract_dataset_id",
+      "id": "946e2d1e-7f6c-4267-ba10-c4dfe14317ce",
       "name": "Extract Dataset ID",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 300]
+      "position": [
+        -2192,
+        208
+      ]
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "=https://api.apify.com/v2/datasets/{{ $json.datasetId }}/items",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "format", "value": "json" },
-            { "name": "clean", "value": "true" },
-            { "name": "limit", "value": "1000" },
-            { "name": "offset", "value": "0" }
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "clean",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "1000"
+            },
+            {
+              "name": "offset",
+              "value": "0"
+            }
           ]
         },
         "options": {
           "response": {
-            "response": {
-              "fullResponse": false
-            }
+            "response": {}
           }
         }
       },
-      "id": "node_fetch_dataset",
+      "id": "cbea64cc-fe64-478c-ba1a-e486491f8661",
       "name": "Fetch Apify Dataset",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [640, 300],
+      "position": [
+        -1968,
+        208
+      ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "apify_header_auth",
-          "name": "Apify API Token"
+          "id": "sIaw3KXseHDfgVDj",
+          "name": "Header Auth account 2"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "// Flag possible truncation if exactly 1000 records returned\nconst items = Array.isArray($input.item.json) ? $input.item.json : [];\nif (items.length === 1000) {\n  console.warn('WARNING: Apify returned exactly 1000 items — dataset may be truncated. Pagination not yet implemented.');\n}\nconst apifyRunId = $('Extract Dataset ID').item.json.apifyRunId;\nreturn items.map(item => ({ json: { ...item, apifyRunId } }));"
+        "jsCode": "// n8n already split the array from the HTTP Request response into individual items.\n// Each execution of this node receives one record — just attach the run ID and pass through.\nconst apifyRunId = $('Extract Dataset ID').first().json.apifyRunId;\n\nconst records = [];\n\nfor (const input of $input.all()) {\n  const json = input.json;\n\n  if (Array.isArray(json)) {\n    records.push(...json);\n  } else if (Array.isArray(json.data)) {\n    records.push(...json.data);\n  } else if (Array.isArray(json.items)) {\n    records.push(...json.items);\n  } else {\n    records.push(json);\n  }\n}\n\nreturn records.map(record => ({\n  json: {\n    ...record,\n    apifyRunId\n  }\n}));"
       },
-      "id": "node_split_items",
+      "id": "8598bf78-868e-4517-aa16-919635cde554",
       "name": "Split Into Items",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [860, 300]
+      "position": [
+        -1744,
+        208
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.item.json;\n\n// Skip closed businesses\nif (item.permanentlyClosed || item.temporarilyClosed) {\n  return null;\n}\n\n// Skip if no phone AND no website\nif (!item.phone && !item.website) {\n  return null;\n}\n\n// Normalize phone\nconst phone = item.phone ? item.phone.replace(/[^\\d+\\-() ]/g, '').trim() : null;\n\n// Extract domain from website\nlet domain = null;\nif (item.website) {\n  try {\n    const url = new URL(item.website.startsWith('http') ? item.website : 'https://' + item.website);\n    domain = url.hostname.replace(/^www\\./, '').toLowerCase();\n  } catch(e) {\n    domain = null;\n  }\n}\n\n// Extract city and state from address\nlet city = null, state = null;\nif (item.address) {\n  const parts = item.address.split(',');\n  if (parts.length >= 2) {\n    city = parts[parts.length - 2]?.trim() || null;\n    const stateZip = parts[parts.length - 1]?.trim().split(' ') || [];\n    state = stateZip[0] || null;\n  }\n}\n\nconst has_website = !!item.website;\n\nreturn [{\n  json: {\n    business_name: item.title || item.name || null,\n    website: item.website || null,\n    domain,\n    phone,\n    address: item.address || null,\n    city,\n    state,\n    google_rating: item.totalScore || null,\n    review_count: item.reviewsCount || 0,\n    category: item.categoryName || (item.categories && item.categories[0]) || null,\n    has_website,\n    source: 'Maps',\n    source_query: item.searchString || null,\n    status: 'Raw',\n    website_fetch_status: has_website ? 'Pending' : 'No Website',\n    date_added: new Date().toISOString().split('T')[0],\n    apify_run_id: item.apifyRunId || null\n  }\n}];"
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item.json;\n\n// Skip closed businesses\nif (item.permanentlyClosed || item.temporarilyClosed) {\n  return null;\n}\n\n// Skip if no phone AND no website\nif (!item.phone && !item.website) {\n  return null;\n}\n\nconst phone = item.phone ? item.phone.replace(/[^\\d+\\-() ]/g, '').trim() : null;\n\nlet domain = null;\nif (item.website) {\n  try {\n    const url = new URL(item.website.startsWith('http') ? item.website : 'https://' + item.website);\n    domain = url.hostname.replace(/^www\\./, '').toLowerCase();\n  } catch (e) {\n    domain = null;\n  }\n}\n\nlet city = null;\nlet state = null;\n\nif (item.address) {\n  const parts = item.address.split(',');\n  if (parts.length >= 2) {\n    city = parts[parts.length - 2]?.trim() || null;\n    const stateZip = parts[parts.length - 1]?.trim().split(' ') || [];\n    state = stateZip[0] || null;\n  }\n}\n\nconst has_website = !!item.website;\n\nreturn {\n  json: {\n    business_name: item.title || item.name || null,\n    website: item.website || null,\n    domain,\n    phone,\n    address: item.address || null,\n    city,\n    state,\n    google_rating: item.totalScore || null,\n    review_count: item.reviewsCount || 0,\n    category: item.categoryName || (item.categories && item.categories[0]) || null,\n    has_website,\n    source: 'Maps',\n    source_query: item.searchString || null,\n    status: 'Raw',\n    website_fetch_status: has_website ? 'Pending' : 'No Website',\n    date_added: new Date().toISOString().split('T')[0],\n    apify_run_id: item.apifyRunId || null\n  }\n};"
       },
-      "id": "node_validate_clean",
+      "id": "8205a8ea-e52a-4ba8-b7c2-ba19881aef9e",
       "name": "Validate & Clean Record",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1080, 300]
+      "position": [
+        -1520,
+        208
+      ]
     },
     {
       "parameters": {
@@ -89,7 +112,8 @@
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "strict",
+            "version": 1
           },
           "conditions": [
             {
@@ -102,49 +126,73 @@
             }
           ],
           "combinator": "and"
-        }
+        },
+        "options": {}
       },
-      "id": "node_filter_nulls",
+      "id": "884f333d-e15d-4f71-b33c-a5ee082dff9b",
       "name": "Filter — Has Business Name",
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2,
-      "position": [1300, 300]
+      "position": [
+        -1296,
+        112
+      ]
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{$env.AIRTABLE_TABLE_NAME}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             {
               "name": "filterByFormula",
-              "value": "={phone}=\"{{ $json.phone }}\""
+              "value": "=AND({phone}=\"{{ $json.phone }}\", {phone}!=\"\")"
             },
-            { "name": "maxRecords", "value": "1" },
-            { "name": "fields[]", "value": "phone" }
+            {
+              "name": "maxRecords",
+              "value": "1"
+            },
+            {
+              "name": "fields[]",
+              "value": "phone"
+            }
           ]
         },
         "options": {}
       },
-      "id": "node_dedup_phone",
+      "id": "bd46a8d1-0fe9-4852-a5e3-1a3db4ee157e",
       "name": "Dedup Check — Phone",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1520, 300],
+      "position": [
+        -1072,
+        112
+      ],
+      "retryOnFail": true,
+      "maxTries": 10,
+      "waitBetweenTries": 3000,
       "credentials": {
         "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
+          "id": "93QPtqiIuIkaKn9q",
+          "name": "Header Auth account 3"
+        },
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
         }
       }
     },
     {
       "parameters": {
         "conditions": {
-          "options": {},
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
           "conditions": [
             {
               "leftValue": "={{ $json.records.length }}",
@@ -152,24 +200,28 @@
               "operator": {
                 "type": "number",
                 "operation": "equals"
-              }
+              },
+              "id": "bf701361-ea8d-4158-bccb-4e29c582b313"
             }
           ],
           "combinator": "and"
-        }
+        },
+        "options": {}
       },
-      "id": "node_if_phone_dup",
+      "id": "7b9303ad-c1b2-4c6f-b64a-41ee9e28b4e0",
       "name": "IF — Phone Duplicate?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1740, 300]
+      "position": [
+        -848,
+        112
+      ]
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -177,28 +229,49 @@
               "name": "filterByFormula",
               "value": "=AND({domain}=\"{{ $('Validate & Clean Record').item.json.domain }}\", {domain}!=\"\")"
             },
-            { "name": "maxRecords", "value": "1" },
-            { "name": "fields[]", "value": "domain" }
+            {
+              "name": "maxRecords",
+              "value": "1"
+            },
+            {
+              "name": "fields[]",
+              "value": "domain"
+            }
           ]
         },
         "options": {}
       },
-      "id": "node_dedup_domain",
+      "id": "ad3d0578-9db3-4ad4-bb9f-96197931ab18",
       "name": "Dedup Check — Domain",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1960, 200],
+      "position": [
+        -624,
+        32
+      ],
+      "retryOnFail": true,
+      "maxTries": 10,
+      "waitBetweenTries": 3000,
       "credentials": {
         "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
+          "id": "93QPtqiIuIkaKn9q",
+          "name": "Header Auth account 3"
+        },
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
         }
       }
     },
     {
       "parameters": {
         "conditions": {
-          "options": {},
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
           "conditions": [
             {
               "leftValue": "={{ $json.records.length }}",
@@ -210,65 +283,48 @@
             }
           ],
           "combinator": "and"
-        }
+        },
+        "options": {}
       },
-      "id": "node_if_domain_dup",
+      "id": "c31ad68d-2d50-4edc-a006-d50e1e0478ca",
       "name": "IF — Domain Duplicate?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [2180, 200]
-    },
-    {
-      "parameters": {
-        "method": "PATCH",
-        "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}/{{ $json.records[0].id }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": []
-        },
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "{\"fields\": {\"status\": \"Duplicate\"}}"
-        }
-      },
-      "id": "node_mark_duplicate",
-      "name": "Mark Existing as Duplicate",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [2400, 340],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
-        }
-      }
+      "position": [
+        -400,
+        32
+      ]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/{{ $env.AIRTABLE_TABLE_NAME }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": []
-        },
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "={{ JSON.stringify({ fields: { business_name: $('Validate & Clean Record').item.json.business_name, website: $('Validate & Clean Record').item.json.website || '', domain: $('Validate & Clean Record').item.json.domain || '', phone: $('Validate & Clean Record').item.json.phone || '', address: $('Validate & Clean Record').item.json.address || '', city: $('Validate & Clean Record').item.json.city || '', state: $('Validate & Clean Record').item.json.state || '', google_rating: $('Validate & Clean Record').item.json.google_rating, review_count: $('Validate & Clean Record').item.json.review_count || 0, category: $('Validate & Clean Record').item.json.category || '', has_website: $('Validate & Clean Record').item.json.has_website, source: 'Maps', source_query: $('Validate & Clean Record').item.json.source_query || '', status: 'Raw', website_fetch_status: $('Validate & Clean Record').item.json.website_fetch_status, date_added: $('Validate & Clean Record').item.json.date_added, apify_run_id: $('Validate & Clean Record').item.json.apify_run_id || '' } }) }}"
-        }
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.airtable_body) }}",
+        "options": {}
       },
-      "id": "node_insert_airtable",
+      "id": "5271fad8-b7e3-4ebc-a690-9cdd52189ae3",
       "name": "Insert to Airtable",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [2400, 100],
+      "position": [
+        48,
+        -16
+      ],
+      "retryOnFail": true,
+      "maxTries": 10,
+      "waitBetweenTries": 3000,
       "credentials": {
         "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
+          "id": "93QPtqiIuIkaKn9q",
+          "name": "Header Auth account 3"
+        },
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
         }
       },
       "onError": "continueErrorOutput"
@@ -277,148 +333,335 @@
       "parameters": {
         "method": "POST",
         "url": "=https://api.airtable.com/v0/{{ $env.AIRTABLE_BASE_ID }}/Pipeline_Errors",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
         "sendBody": true,
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "={{ JSON.stringify({ fields: { workflow: 'Workflow A — Ingest', error_message: $json.error?.message || 'Unknown error', raw_record: JSON.stringify($('Validate & Clean Record').item.json).substring(0, 500), timestamp: new Date().toISOString() } }) }}"
-        }
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {}
       },
-      "id": "node_log_insert_error",
+      "id": "cebe0201-223f-4e0e-8526-ed0866ee6373",
       "name": "Log Insert Error",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [2620, 220],
+      "position": [
+        272,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
       "credentials": {
         "httpHeaderAuth": {
-          "id": "airtable_header_auth",
-          "name": "Airtable API Key"
+          "id": "93QPtqiIuIkaKn9q",
+          "name": "Header Auth account 3"
+        },
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "// This node runs once after all items are processed via aggregate\n// In n8n, use a Merge or summarize approach — here we post a simple completion message\nconst slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) {\n  console.log('Slack webhook not configured, skipping notification');\n  return [{ json: { skipped: true } }];\n}\n\nconst body = {\n  text: `✅ *Workflow A Complete*\\nApify ingest run finished. Check Airtable for new Raw records.`\n};\n\n// We return the body for the next HTTP node to post\nreturn [{ json: { slackBody: body, slackUrl } }];"
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\n\nif (!slackUrl) {\n  return [{ json: { skipped: true } }];\n}\n\nreturn [{\n  json: {\n    slackUrl: slackUrl,\n    slackBody: {\n      text: \"✅ *Workflow A Complete*\\nApify ingest run finished. Check Airtable for new Raw records.\"\n    }\n  }\n}];"
       },
-      "id": "node_log_summary",
+      "id": "3d4380e6-79c5-4f21-8fab-328be107e1c5",
       "name": "Build Slack Summary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2620, 60]
+      "position": [
+        272,
+        -112
+      ]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "={{ $json.slackUrl }}",
         "sendBody": true,
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "={{ JSON.stringify($json.slackBody) }}"
-        }
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
       },
-      "id": "node_slack_notify",
+      "id": "12791f13-18c9-4b97-8b07-d2a0e5777f7d",
       "name": "Slack — Ingest Complete",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [2840, 60]
+      "position": [
+        496,
+        -112
+      ]
     },
     {
       "parameters": {},
-      "id": "node_error_trigger",
+      "id": "6d9110c4-74cc-48bd-aa17-18f4376f4914",
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [200, 560]
+      "position": [
+        -2416,
+        528
+      ]
     },
     {
       "parameters": {
         "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: {\n  slackUrl,\n  slackBody: {\n    text: `🚨 *Workflow A Error*\\n${err.execution?.error?.message || 'Unknown error'}\\nExecution: ${err.execution?.id || 'N/A'}`\n  }\n}}];"
       },
-      "id": "node_error_format",
+      "id": "2b7e8bb7-6e1c-482c-82f9-413682d119ed",
       "name": "Format Error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 560]
+      "position": [
+        -2192,
+        528
+      ]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "={{ $json.slackUrl }}",
         "sendBody": true,
-        "options": {
-          "bodyContentType": "json",
-          "jsonBody": "={{ JSON.stringify($json.slackBody) }}"
-        }
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {}
       },
-      "id": "node_error_slack",
+      "id": "06938b32-598e-4e22-abc2-0919235271f4",
       "name": "Slack — Error Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [640, 560]
+      "position": [
+        -1968,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    type: typeof $input.item.json,\n    isArray: Array.isArray($input.item.json),\n    keys: typeof $input.item.json === 'object' ? Object.keys($input.item.json) : 'n/a',\n    preview: JSON.stringify($input.item.json).substring(0, 500)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1296,
+        304
+      ],
+      "id": "403ca25d-07b5-4a0d-95ce-c0ae6ed67dc1",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const r = $('Validate & Clean Record').item.json;\n\nreturn {\n  json: {\n    airtable_body: {\n      fields: {\n        business_name: r.business_name || '',\n        website: r.website || '',\n        domain: r.domain || '',\n        phone: r.phone || '',\n        address: r.address || '',\n        city: r.city || '',\n        state: r.state || '',\n        google_rating: r.google_rating || null,\n        review_count: r.review_count || 0,\n        category: r.category || '',\n        has_website: r.has_website || false,\n        source: r.source || 'Maps',\n        source_query: r.source_query || '',\n        status: 'Raw',\n        website_fetch_status: r.website_fetch_status || 'Pending',\n        date_added: r.date_added || '',\n        apify_run_id: r.apify_run_id || ''\n      }\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        -16
+      ],
+      "id": "5d65c914-7e5a-44b2-8468-db5c0f24adac",
+      "name": "Build Airtable Body"
     }
   ],
+  "pinData": {},
   "connections": {
     "Webhook — Apify POST": {
-      "main": [[{ "node": "Extract Dataset ID", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Extract Dataset ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Extract Dataset ID": {
-      "main": [[{ "node": "Fetch Apify Dataset", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Fetch Apify Dataset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Fetch Apify Dataset": {
-      "main": [[{ "node": "Split Into Items", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Split Into Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Split Into Items": {
-      "main": [[{ "node": "Validate & Clean Record", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate & Clean Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate & Clean Record": {
-      "main": [[{ "node": "Filter — Has Business Name", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Filter — Has Business Name",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Filter — Has Business Name": {
-      "main": [[{ "node": "Dedup Check — Phone", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Dedup Check — Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Dedup Check — Phone": {
-      "main": [[{ "node": "IF — Phone Duplicate?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "IF — Phone Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "IF — Phone Duplicate?": {
       "main": [
-        [{ "node": "Dedup Check — Domain", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Dedup Check — Domain",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     },
     "Dedup Check — Domain": {
-      "main": [[{ "node": "IF — Domain Duplicate?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "IF — Domain Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "IF — Domain Duplicate?": {
       "main": [
-        [{ "node": "Insert to Airtable", "type": "main", "index": 0 }],
-        [{ "node": "Mark Existing as Duplicate", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build Airtable Body",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     },
     "Insert to Airtable": {
-      "main": [[{ "node": "Build Slack Summary", "type": "main", "index": 0 }]],
-      "error": [[{ "node": "Log Insert Error", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Build Slack Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Insert Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build Slack Summary": {
-      "main": [[{ "node": "Slack — Ingest Complete", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Slack — Ingest Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Error Trigger": {
-      "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Format Error": {
-      "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Slack — Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Airtable Body": {
+      "main": [
+        [
+          {
+            "node": "Insert to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": true,
+  "active": false,
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner",
-    "errorWorkflow": ""
+    "binaryMode": "separate"
   },
-  "tags": ["lead-pipeline", "ingest"],
+  "versionId": "de1b6008-f627-4155-a2f1-3e39aee68503",
   "meta": {
-    "templateCredsSetupCompleted": false,
-    "instanceId": ""
-  }
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8144db7907c816170629971836b96cd89a9c228a0e6f7a76bd886fc19afc627f"
+  },
+  "nodeGroups": [],
+  "id": "2p3Ynq0CJR3MYvRw",
+  "tags": []
 }

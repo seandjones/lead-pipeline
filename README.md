@@ -2,7 +2,7 @@
 
 Automated lead pipeline for targeting small trades businesses (HVAC, plumbing, roofing) that are candidates for AI automation services.
 
-**Stack:** n8n · Apify · Airtable · Hunter.io · Claude API · HubSpot · Docker + Nginx
+**Stack:** n8n · Apify · Airtable · Hunter.io · Apollo.io · Claude API · HubSpot · Docker + Nginx
 
 ---
 
@@ -12,7 +12,7 @@ Automated lead pipeline for targeting small trades businesses (HVAC, plumbing, r
 - A domain name pointed at that IP via an A record
 - Docker Engine ≥ 24.x
 - Docker Compose ≥ 2.x
-- Accounts and API keys for: Apify, Airtable, Hunter.io, Anthropic, HubSpot
+- Accounts and API keys for: Apify, Airtable, Hunter.io, Apollo.io, Anthropic, HubSpot
 
 ---
 
@@ -72,7 +72,7 @@ In n8n UI go to **Credentials → Add Credential** and create:
 | `Apify API Token` | HTTP Header Auth | Header: `Authorization`, Value: `Bearer YOUR_APIFY_TOKEN` |
 | `Airtable API Key` | HTTP Header Auth | Header: `Authorization`, Value: `Bearer YOUR_AIRTABLE_KEY` |
 
-All other API keys (Anthropic, HubSpot, Hunter, Slack) are passed via environment variables and accessed in workflows via `$env.VARIABLE_NAME`.
+All other API keys (Anthropic, HubSpot, Hunter, Apollo, Slack) are passed via environment variables and accessed in workflows via `$env.VARIABLE_NAME`.
 
 ### 6. Activate workflows
 
@@ -89,6 +89,33 @@ Open each workflow in n8n and toggle it to **Active**.
 3. Rename the default table to `Leads`
 4. Add a second table named `Pipeline_Errors` (used for error logging)
 5. Add a third table named `CRM_Retry_Queue` (used for HubSpot retry logic)
+
+> **All three tables must exist before activating any workflow.** Workflow A writes to `Pipeline_Errors` on insert failures. Workflow C writes to `CRM_Retry_Queue` on HubSpot 5xx errors.
+
+### Required fields in the `Pipeline_Errors` table
+
+Created automatically when Workflow A catches an Airtable insert failure. Create this table manually with the following fields:
+
+| Field Name | Field Type | Notes |
+|---|---|---|
+| `workflow` | Single line text | Primary field — which workflow logged the error |
+| `error_message` | Long text | The error message from n8n |
+| `raw_record` | Long text | First 500 chars of the record that failed |
+| `timestamp` | Single line text | ISO timestamp of when the error occurred |
+
+### Required fields in the `CRM_Retry_Queue` table
+
+Used by Workflow C when HubSpot returns a 5xx server error. The record is queued here and retried on the next run.
+
+| Field Name | Field Type | Notes |
+|---|---|---|
+| `business_name` | Single line text | Primary field |
+| `airtable_record_id` | Single line text | The Airtable record ID to update after successful retry |
+| `hubspot_payload` | Long text | JSON payload that failed — used to retry the push |
+| `error_message` | Long text | The HubSpot error response |
+| `retry_count` | Number | Integer — incremented each retry attempt |
+| `status` | Single select | Options: Pending, Retried, Failed |
+| `timestamp` | Single line text | ISO timestamp when the failure occurred |
 
 ### Getting your Base ID
 
@@ -123,6 +150,7 @@ Create these fields manually or via the Airtable API:
 | `website_fetch_status` | Single select: Pending, Success, Failed, No Website |
 | `contact_email` | Email |
 | `contact_name` | Single line text |
+| `mobile_phone` | Phone number |
 | `hubspot_contact_id` | Single line text |
 | `status` | Single select: Raw, Scored, Enriched, Pushed, Archived, Duplicate |
 | `date_added` | Date |
@@ -148,6 +176,8 @@ Before running Workflow C, create these custom contact properties in HubSpot:
 | Lead Summary | `lead_summary` | Multi-line text |
 | Google Rating | `google_rating` | Number |
 | Review Count | `review_count` | Number |
+| Lead Source | `lead_source` | Single-line text |
+
 
 ### Custom deal property
 
@@ -163,6 +193,47 @@ Use a **Private App** token (not a legacy API key):
 1. HubSpot → Settings → Integrations → Private Apps → Create a private app
 2. Scopes required: `crm.objects.contacts.write`, `crm.objects.deals.write`, `crm.associations.write`
 3. Copy the token and set it as `HUBSPOT_API_KEY` in `.env`
+
+---
+
+## Apollo.io Setup
+
+Workflow C uses Apollo.io after Hunter.io to search for Owner/CEO contacts by company website, pulling a mobile phone number and name.
+
+### Account and plan
+
+- Sign up at [app.apollo.io](https://app.apollo.io)
+- **A paid plan is required for mobile phone export.** The free tier returns emails only; the Basic plan ($49/mo) unlocks mobile numbers.
+- Apollo's API credits are consumed per contact record revealed. Each lead that has a website will use one search credit and up to one export credit (for the mobile number).
+
+### Get your API key
+
+1. Log in to Apollo → click your avatar (bottom-left) → **Settings**
+2. Go to **Integrations → API** (or navigate to **Developer Settings**)
+3. Copy your API key and set it as `APOLLO_API_KEY` in `.env`
+
+> Rate limits: the Basic plan allows 50 API requests/minute. Workflow C processes up to 15 leads per run every 4 hours, well within limits.
+
+### How the search works
+
+For each lead with a `website` value, Workflow C calls `POST https://api.apollo.io/v1/mixed_people/search` with:
+- `q_organization_website_url` — the lead's website URL
+- `person_titles` — `["owner", "ceo", "president"]`
+- `per_page` — `5`
+
+From the results, the workflow picks the highest-priority match (owner → ceo → president → first result) and extracts:
+- **Mobile phone** → written to Airtable `mobile_phone` field (`type: "mobile"` preferred; falls back to first available number)
+- **Contact name** → overwrites the Hunter.io name in `contact_name` (Apollo is more authoritative for business owners)
+
+If Apollo returns an error or no results, the workflow continues without failing — `mobile_phone` is left blank and the Hunter.io name (if any) is preserved.
+
+### Airtable field required
+
+Add this field to your `Leads` table before activating the updated Workflow C:
+
+| Field Name | Field Type |
+|---|---|
+| `mobile_phone` | Phone number |
 
 ---
 
@@ -261,7 +332,7 @@ After the first batch of 25 records are scored by Workflow B:
 If `SLACK_WEBHOOK_URL` is set, you will receive:
 - ✅ Workflow A completion after each Apify webhook
 - 📊 Workflow B completion after each scoring batch
-- 🔧 Individual lead alerts from Workflow C for each pushed lead
+- 🔧 Individual lead alerts from Workflow C for each pushed lead (includes mobile number if found via Apollo)
 - 📊 Weekly summary from Workflow D every Sunday night
 - 🚨 Error alerts from any workflow's Error Trigger
 
