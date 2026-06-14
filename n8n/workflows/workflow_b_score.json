@@ -69,9 +69,19 @@
     {
       "parameters": {
         "url": "={{ $json.website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+            { "name": "Accept-Encoding", "value": "gzip, deflate, br" },
+            { "name": "Cache-Control", "value": "no-cache" }
+          ]
+        },
         "options": {
-          "timeout": 10000,
-          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 3 } },
+          "timeout": 15000,
+          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 5 } },
           "allowUnauthorizedCerts": true,
           "response": { "response": { "fullResponse": false, "responseFormat": "text" } }
         }
@@ -105,7 +115,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\n// Carry original record data forward — reach back to Split Into Items (1:1 item pairing)\nconst record = $('Split Into Items').item.json;\nreturn [{ json: { ...record, website_text: text, website_fetch_status: 'Success' } }];"
+        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\n// Detect bot-wall / parked-domain / thin-content responses before they reach Claude.\n// These are strings that appear on interstitial pages, not on real business sites.\nconst JUNK_PATTERNS = [\n  /this domain is (for sale|parked|registered)/i,\n  /parked (by|with|at|on)/i,\n  /godaddy\\.com|namecheap\\.com|sedoparking\\.com|hugedomains\\.com/i,\n  /under construction/i,\n  /coming soon/i,\n  /cf-browser-verification|enable javascript and cookies to continue|checking your browser/i,\n  /ddos-guard|cloudflare ray id/i,\n  /access denied|403 forbidden|not found|404 error/i,\n  /^\\s*$/,\n];\n\nconst isThin = text.replace(/\\s/g, '').length < 150;\nconst isJunk = JUNK_PATTERNS.some(p => p.test(text));\n\nconst record = $('Split Into Items').item.json;\n\nif (isThin || isJunk) {\n  // Surface the raw HTML length so the retry node can log it\n  return [{ json: { ...record, website_text: text, website_fetch_status: 'ThinContent', raw_html_length: htmlStr.length } }];\n}\n\nreturn [{ json: { ...record, website_text: text, website_fetch_status: 'Success' } }];"
       },
       "id": "node_extract_text",
       "name": "Extract Text from HTML",
@@ -115,13 +125,76 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [{
+            "leftValue": "={{ $json.website_fetch_status }}",
+            "rightValue": "ThinContent",
+            "operator": { "type": "string", "operation": "equals" }
+          }],
+          "combinator": "and"
+        }
+      },
+      "id": "node_check_thin",
+      "name": "IF — Thin Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try fetching with www. prefix if the original URL omitted it, or vice-versa.\n// This catches sites that only respond on one canonical form.\nconst record = $input.item.json;\nlet altUrl = record.website || '';\ntry {\n  const u = new URL(altUrl);\n  if (u.hostname.startsWith('www.')) {\n    u.hostname = u.hostname.replace(/^www\\./, '');\n  } else {\n    u.hostname = 'www.' + u.hostname;\n  }\n  altUrl = u.toString();\n} catch(e) {}\nreturn [{ json: { ...record, alt_website: altUrl } }];"
+      },
+      "id": "node_build_alt_url",
+      "name": "Build Alt URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 60]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.alt_website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 5 } },
+          "allowUnauthorizedCerts": true,
+          "response": { "response": { "fullResponse": false, "responseFormat": "text" } }
+        }
+      },
+      "id": "node_fetch_alt",
+      "name": "Fetch Alt URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1960, 60],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge alt-fetch result back with the original record.\n// Use whichever text is longer (alt vs. original thin text).\nconst html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\nconst prevRecord = $('Build Alt URL').item.json;\nconst originalText = prevRecord.website_text || '';\n\n// Prefer whichever version has more content\nconst finalText = text.length > originalText.length ? text : originalText;\nconst fetchStatus = finalText.replace(/\\s/g, '').length >= 150 ? 'Success' : 'ThinContent';\n\nreturn [{ json: { ...prevRecord, website_text: finalText, website_fetch_status: fetchStatus } }];"
+      },
+      "id": "node_merge_alt",
+      "name": "Merge Alt Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 60]
+    },
+    {
+      "parameters": {
         "jsCode": "const record = $input.item.json;\n\nconst systemPrompt = `You are a lead qualification specialist for an AI automation agency that sells workflow automation to small trades businesses (HVAC, plumbing, roofing contractors).\nYour job is to analyze a business website and determine how likely that business is to need and benefit from automation services.\n\nHIGH-value targets are businesses that:\n- Have no online booking or scheduling system\n- List only a phone number as their contact method with no form or chat\n- Have vague, sparse service descriptions suggesting no structured processes\n- Make no mention of software, apps, CRM, or customer portals\n- Have emergency/24-7 claims but no automated system to back it up\n- Show signs of being run manually (e.g. \"call for a quote\", \"we'll get back to you\")\n- Have generic, template-looking websites with minimal custom content\n\nLOW-value targets are businesses that:\n- Mention ServiceTitan, Housecall Pro, Jobber, or other trades software\n- Have an embedded booking widget or online scheduling\n- Actively advertise their use of technology as a selling point\n- Are clearly a franchise or large chain (likely already automated)\n\nYou must return ONLY a valid JSON object. No preamble, no explanation, no markdown.`;\n\nconst userPrompt = `Analyze this trades business website and score it.\n\nBusiness: ${record.business_name}\nCategory: ${record.category || 'Unknown'}\nWebsite URL: ${record.website}\n\nWebsite Content:\n\"\"\"\n${record.website_text || '(no content retrieved)'}\n\"\"\"\n\nReturn this exact JSON structure:\n{\n  \"score\": <integer 1-10>,\n  \"signals\": [<array of strings, each describing a specific signal found, max 5>],\n  \"summary\": \"<one sentence explaining the score>\",\n  \"has_booking_system\": <boolean>,\n  \"mentions_software\": <boolean>,\n  \"software_mentioned\": \"<name of software if found, else null>\"\n}`;\n\nreturn [{ json: { ...record, claude_request_body: { model: 'claude-sonnet-4-5', max_tokens: 500, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] } } }];"
       },
       "id": "node_build_prompt",
       "name": "Build Claude Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1520, 140]
+      "position": [2400, 140]
     },
     {
       "parameters": {
@@ -144,7 +217,7 @@
       "name": "Call Claude API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1740, 140],
+      "position": [2620, 140],
       "onError": "continueErrorOutput"
     },
     {
@@ -153,7 +226,7 @@
       "name": "Wait 5s Before Retry",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1,
-      "position": [1960, 380]
+      "position": [2840, 380]
     },
     {
       "parameters": {
@@ -176,7 +249,7 @@
       "name": "Call Claude API — Retry",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [2180, 380],
+      "position": [3060, 380],
       "onError": "continueErrorOutput"
     },
     {
@@ -187,7 +260,7 @@
       "name": "Claude Error Fallback",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2400, 500]
+      "position": [3280, 500]
     },
     {
       "parameters": {
@@ -197,7 +270,7 @@
       "name": "Parse Claude Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2180, 140]
+      "position": [3060, 140]
     },
     {
       "parameters": { "amount": 2, "unit": "seconds" },
@@ -205,7 +278,7 @@
       "name": "Wait 2s — Rate Limit",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1,
-      "position": [2400, 140]
+      "position": [3280, 140]
     },
     {
       "parameters": {
@@ -222,7 +295,7 @@
       "name": "Update Airtable Record",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [2620, 140],
+      "position": [3500, 140],
       "credentials": {
         "airtableTokenApi": { "id": "airtable_token", "name": "Airtable Personal Access Token" }
       }
@@ -235,7 +308,7 @@
       "name": "Build Completion Message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2840, 140]
+      "position": [3720, 140]
     },
     {
       "parameters": {
@@ -250,7 +323,7 @@
       "name": "Slack — Scoring Complete",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [3060, 140]
+      "position": [3940, 140]
     },
     {
       "parameters": {},
@@ -302,7 +375,21 @@
         [{ "node": "Mark Fetch Failed", "type": "main", "index": 0 }]
       ]
     },
-    "Extract Text from HTML": { "main": [[{ "node": "Build Claude Prompt", "type": "main", "index": 0 }]] },
+    "Extract Text from HTML": { "main": [[{ "node": "IF — Thin Content?", "type": "main", "index": 0 }]] },
+    "IF — Thin Content?": {
+      "main": [
+        [{ "node": "Build Alt URL", "type": "main", "index": 0 }],
+        [{ "node": "Build Claude Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Alt URL": { "main": [[{ "node": "Fetch Alt URL", "type": "main", "index": 0 }]] },
+    "Fetch Alt URL": {
+      "main": [
+        [{ "node": "Merge Alt Content", "type": "main", "index": 0 }],
+        [{ "node": "Build Claude Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge Alt Content": { "main": [[{ "node": "Build Claude Prompt", "type": "main", "index": 0 }]] },
     "Build Claude Prompt": { "main": [[{ "node": "Call Claude API", "type": "main", "index": 0 }]] },
     "Call Claude API": {
       "main": [
