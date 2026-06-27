@@ -1,0 +1,409 @@
+{
+  "name": "RE Workflow E — Enrichment & HubSpot Push",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "2 */4 * * *" }]
+        }
+      },
+      "id": "re_e_schedule",
+      "name": "Schedule — Every 4 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [-1100, -32]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "AND({status}='Scored',{ai_score}>=6)" },
+            { "name": "sort[0][field]", "value": "ai_score" },
+            { "name": "sort[0][direction]", "value": "desc" },
+            { "name": "maxRecords", "value": "15" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_e_fetch_qualified",
+      "name": "Fetch Qualified Agents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-876, -32],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [{
+            "leftValue": "={{ $json.records.length }}",
+            "rightValue": 0,
+            "operator": { "type": "number", "operation": "larger" }
+          }],
+          "combinator": "and"
+        }
+      },
+      "id": "re_e_if_records",
+      "name": "IF — Records Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-656, -32]
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nreturn records.map(r => ({\n  json: {\n    record_id: r.id,\n    agent_name: r.fields.agent_name || '',\n    agency_name: r.fields.agency_name || '',\n    website: r.fields.website || '',\n    domain: r.fields.domain || '',\n    phone: r.fields.phone || '',\n    address: r.fields.address || '',\n    city: r.fields.city || '',\n    state: r.fields.state || '',\n    zip_code: r.fields.zip_code || '',\n    google_rating: r.fields.google_rating || null,\n    review_count: r.fields.review_count || 0,\n    has_live_chat: r.fields.has_live_chat || false,\n    response_time_minutes: r.fields.response_time_minutes || null,\n    ai_score: r.fields.ai_score || 0,\n    ai_signals: r.fields.ai_signals || '',\n    ai_summary: r.fields.ai_summary || ''\n  }\n}));"
+      },
+      "id": "re_e_split",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-432, -32]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hunter.io/v2/domain-search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "domain", "value": "={{ $json.domain }}" },
+            { "name": "api_key", "value": "={{ $env.HUNTER_API_KEY }}" },
+            { "name": "limit", "value": "5" },
+            { "name": "type", "value": "personal" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_e_hunter",
+      "name": "Hunter.io Domain Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-208, -32],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pass through on Hunter error so the pipeline continues.\nconst record = $('Split Into Items').item.json;\nreturn [{ json: { ...record, hunter_error: true } }];"
+      },
+      "id": "re_e_hunter_error",
+      "name": "Hunter Error — Continue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [16, 120]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prioritize personal email of the agent by title rank.\nconst emails = $input.item.json.data?.emails || [];\nconst PRIORITY = ['owner','agent','realtor','broker','ceo','president','manager'];\n\nlet best = null;\nfor (const title of PRIORITY) {\n  best = emails.find(e => (e.position || '').toLowerCase().includes(title));\n  if (best) break;\n}\nif (!best && emails.length > 0) best = emails[0];\n\nconst record = $('Split Into Items').item.json;\nreturn [{ json: {\n  ...record,\n  contact_email: best?.value || null,\n  contact_name: best ? [best.first_name, best.last_name].filter(Boolean).join(' ') : null,\n  hunter_confidence: best?.confidence || null\n} }];"
+      },
+      "id": "re_e_extract_email",
+      "name": "Extract Best Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [16, -32]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apollo.io/v1/mixed_people/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.APOLLO_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ q_organization_domains: [$json.domain], person_titles: ['real estate agent', 'realtor', 'broker', 'owner'], page: 1, per_page: 5 }) }}",
+        "options": {}
+      },
+      "id": "re_e_apollo",
+      "name": "Apollo.io — People Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [240, -32],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Extract Best Email').item.json;\nreturn [{ json: { ...prev, apollo_error: true } }];"
+      },
+      "id": "re_e_apollo_error",
+      "name": "Apollo Error — Continue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [464, 120]
+    },
+    {
+      "parameters": {
+        "jsCode": "const people = $input.item.json.people || [];\nconst PRIORITY = ['real estate agent', 'realtor', 'broker', 'owner'];\n\nlet best = null;\nfor (const title of PRIORITY) {\n  best = people.find(p => (p.title || '').toLowerCase().includes(title));\n  if (best) break;\n}\nif (!best && people.length > 0) best = people[0];\n\nconst prev = $('Extract Best Email').item.json;\nreturn [{ json: {\n  ...prev,\n  contact_name: best ? [best.first_name, best.last_name].filter(Boolean).join(' ') : prev.contact_name,\n  mobile_phone: best?.sanitized_phone || best?.phone_numbers?.[0]?.sanitized_number || null\n} }];"
+      },
+      "id": "re_e_extract_apollo",
+      "name": "Extract Apollo Contact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [464, -32]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.item.json;\nconst nameParts = (r.contact_name || r.agent_name || '').split(' ');\nconst firstName = nameParts[0] || '';\nconst lastName = nameParts.slice(1).join(' ') || '';\n\nreturn [{ json: {\n  ...r,\n  hs_firstname: firstName,\n  hs_lastname: lastName\n} }];"
+      },
+      "id": "re_e_prep_hubspot",
+      "name": "Prepare HubSpot Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [688, -32]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.HUBSPOT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { firstname: $json.hs_firstname, lastname: $json.hs_lastname, email: $json.contact_email || '', phone: $json.phone || '', mobilephone: $json.mobile_phone || '', company: $json.agency_name || $json.agent_name, website: $json.website || '', city: $json.city || '', state: $json.state || '', zip: $json.zip_code || '', hs_lead_status: 'NEW', ai_automation_score: $json.ai_score, automation_pain_signals: $json.ai_signals, lead_summary: $json.ai_summary, google_rating: $json.google_rating, review_count: $json.review_count, response_time_minutes: $json.response_time_minutes, has_live_chat: String($json.has_live_chat) } }) }}",
+        "options": {}
+      },
+      "id": "re_e_create_contact",
+      "name": "Create HubSpot Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [912, -32],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 409 = contact already exists — extract the existing contact ID.\nconst error = $input.item.json;\nconst existingId = error.message?.match(/existing ID: (\\d+)/)?.[1] || null;\nreturn [{ json: { ...$('Prepare HubSpot Fields').item.json, hubspot_contact_id: existingId, is_duplicate: true } }];"
+      },
+      "id": "re_e_handle_dup",
+      "name": "Handle HubSpot Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1136, 160]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.hubspot_contact_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.HUBSPOT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { ai_automation_score: $json.ai_score, automation_pain_signals: $json.ai_signals, lead_summary: $json.ai_summary, response_time_minutes: $json.response_time_minutes } }) }}",
+        "options": {}
+      },
+      "id": "re_e_update_contact",
+      "name": "Update Existing HubSpot Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1360, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.item.json;\nreturn [{ json: { ...$('Prepare HubSpot Fields').item.json, hubspot_contact_id: res.id || null } }];"
+      },
+      "id": "re_e_set_contact_id",
+      "name": "Set Contact ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1136, -32]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.HUBSPOT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { dealname: ($json.agent_name || 'Unknown Agent') + ' — Live Chat + Lead Response', dealstage: 'appointmentscheduled', lead_score: $json.ai_score, pipeline: 'default' } }) }}",
+        "options": {}
+      },
+      "id": "re_e_create_deal",
+      "name": "Create HubSpot Deal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1584, -32]
+    },
+    {
+      "parameters": {
+        "jsCode": "const deal = $input.item.json;\nconst prev = $('Set Contact ID').item.json;\nreturn [{ json: { ...prev, hubspot_deal_id: deal.id || null } }];"
+      },
+      "id": "re_e_set_deal_id",
+      "name": "Set Deal ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1808, -32]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/associations/deals/contacts/batch/create",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.HUBSPOT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: [{ from: { id: $json.hubspot_deal_id }, to: { id: $json.hubspot_contact_id }, type: 'deal_to_contact' }] }) }}",
+        "options": {}
+      },
+      "id": "re_e_associate",
+      "name": "Associate Deal with Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2032, -32]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { status: 'Pushed', date_pushed: new Date().toISOString().split('T')[0], contact_email: $json.contact_email || '', contact_name: $json.contact_name || '', mobile_phone: $json.mobile_phone || '', hubspot_contact_id: $json.hubspot_contact_id || '' } }) }}",
+        "options": {}
+      },
+      "id": "re_e_update_airtable",
+      "name": "Update Airtable — Pushed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2256, -32],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nconst r = $input.item.json;\nconst chatBadge = r.has_live_chat ? '✅ Has chat' : '❌ No live chat';\nreturn [{ json: { slackUrl, slackBody: { text: `🏠 *New RE Agent — Pushed to CRM*\\n${r.agent_name} @ ${r.agency_name || 'Independent'} — Score: ${r.ai_score}/10\\n📍 ${r.city}, ${r.state} ${r.zip_code}\\n${chatBadge}${r.response_time_minutes ? ` | ⏱ ${r.response_time_minutes}min response` : ''}\\n📞 ${r.phone || 'N/A'} | 📱 ${r.mobile_phone || 'N/A'}\\n📧 ${r.contact_email || 'N/A'}\\n🌐 ${r.website || 'N/A'}\\nWhy: ${r.ai_signals}` } } }];"
+      },
+      "id": "re_e_slack_msg",
+      "name": "Build Slack Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2480, -32]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_e_slack",
+      "name": "Slack — Agent Pushed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2704, -32]
+    },
+    {
+      "parameters": {},
+      "id": "re_e_error_trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [-1100, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *RE Workflow E Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
+      },
+      "id": "re_e_format_error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-876, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_e_error_slack",
+      "name": "Slack — Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-652, 320]
+    }
+  ],
+  "connections": {
+    "Schedule — Every 4 Hours": { "main": [[{ "node": "Fetch Qualified Agents", "type": "main", "index": 0 }]] },
+    "Fetch Qualified Agents": { "main": [[{ "node": "IF — Records Found?", "type": "main", "index": 0 }]] },
+    "IF — Records Found?": {
+      "main": [
+        [{ "node": "Split Into Items", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Split Into Items": { "main": [[{ "node": "Hunter.io Domain Search", "type": "main", "index": 0 }]] },
+    "Hunter.io Domain Search": {
+      "main": [
+        [{ "node": "Extract Best Email", "type": "main", "index": 0 }],
+        [{ "node": "Hunter Error — Continue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Hunter Error — Continue": { "main": [[{ "node": "Extract Best Email", "type": "main", "index": 0 }]] },
+    "Extract Best Email": { "main": [[{ "node": "Apollo.io — People Search", "type": "main", "index": 0 }]] },
+    "Apollo.io — People Search": {
+      "main": [
+        [{ "node": "Extract Apollo Contact", "type": "main", "index": 0 }],
+        [{ "node": "Apollo Error — Continue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Apollo Error — Continue": { "main": [[{ "node": "Extract Apollo Contact", "type": "main", "index": 0 }]] },
+    "Extract Apollo Contact": { "main": [[{ "node": "Prepare HubSpot Fields", "type": "main", "index": 0 }]] },
+    "Prepare HubSpot Fields": { "main": [[{ "node": "Create HubSpot Contact", "type": "main", "index": 0 }]] },
+    "Create HubSpot Contact": {
+      "main": [
+        [{ "node": "Set Contact ID", "type": "main", "index": 0 }],
+        [{ "node": "Handle HubSpot Duplicate", "type": "main", "index": 0 }]
+      ]
+    },
+    "Handle HubSpot Duplicate": { "main": [[{ "node": "Update Existing HubSpot Contact", "type": "main", "index": 0 }]] },
+    "Update Existing HubSpot Contact": { "main": [[{ "node": "Set Contact ID", "type": "main", "index": 0 }]] },
+    "Set Contact ID": { "main": [[{ "node": "Create HubSpot Deal", "type": "main", "index": 0 }]] },
+    "Create HubSpot Deal": { "main": [[{ "node": "Set Deal ID", "type": "main", "index": 0 }]] },
+    "Set Deal ID": { "main": [[{ "node": "Associate Deal with Contact", "type": "main", "index": 0 }]] },
+    "Associate Deal with Contact": { "main": [[{ "node": "Update Airtable — Pushed", "type": "main", "index": 0 }]] },
+    "Update Airtable — Pushed": { "main": [[{ "node": "Build Slack Alert", "type": "main", "index": 0 }]] },
+    "Build Slack Alert": { "main": [[{ "node": "Slack — Agent Pushed", "type": "main", "index": 0 }]] },
+    "Error Trigger": { "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]] },
+    "Format Error": { "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "tags": ["re-pipeline", "enrichment"],
+  "meta": { "templateCredsSetupCompleted": false, "instanceId": "" }
+}

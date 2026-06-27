@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "HVAC in Westminster CO",
+    "HVAC near Westminster CO",
+    "best HVAC in Westminster CO",
+    "local HVAC Westminster CO",
+    "HVAC services Westminster CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}

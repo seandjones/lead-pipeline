@@ -1,0 +1,318 @@
+{
+  "name": "RE Workflow B — Vulnerability Audit",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 */6 * * *" }]
+        }
+      },
+      "id": "re_b_schedule",
+      "name": "Schedule — Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "{status}='Raw'" },
+            { "name": "sort[0][field]", "value": "date_added" },
+            { "name": "sort[0][direction]", "value": "asc" },
+            { "name": "maxRecords", "value": "20" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_b_fetch_raw",
+      "name": "Fetch Raw Agents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [420, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [{
+            "leftValue": "={{ $json.records.length }}",
+            "rightValue": 0,
+            "operator": { "type": "number", "operation": "larger" }
+          }],
+          "combinator": "and"
+        }
+      },
+      "id": "re_b_if_records",
+      "name": "IF — Records Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nreturn records.map(r => ({\n  json: {\n    record_id: r.id,\n    agent_name: r.fields.agent_name || '',\n    website: r.fields.website || '',\n    domain: r.fields.domain || '',\n    phone: r.fields.phone || '',\n    city: r.fields.city || '',\n    state: r.fields.state || ''\n  }\n}));"
+      },
+      "id": "re_b_split",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 5 } },
+          "allowUnauthorizedCerts": true,
+          "response": { "response": { "fullResponse": false, "responseFormat": "text" } }
+        }
+      },
+      "id": "re_b_fetch_website",
+      "name": "Fetch Website HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 200],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mark as Audited with no website signal when fetch fails.\nconst record = $('Split Into Items').item.json;\nreturn [{ json: { ...record, has_live_chat: false, contact_form_found: false, audit_failed: true } }];"
+      },
+      "id": "re_b_fetch_failed",
+      "name": "Mark Fetch Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Live chat detection: scan for known widget script signatures.\n// Contact form detection: scan for <form> elements with email/text inputs.\nconst html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\nconst htmlLower = htmlStr.toLowerCase();\n\nconst CHAT_PATTERNS = [\n  'tawk.to', 'tawk_api', 'drift.com', '__drift',\n  'intercom.io', 'intercomsettings', 'intercom(',\n  'livechatinc', 'lc_api', '__lc',\n  'tidio', 'tidioChat',\n  'crisp.chat', 'window.$crisp',\n  'freshchat', 'freshdesk',\n  'zopim', 'zendesk',\n  'olark',\n  'liveperson',\n  'snapengage',\n  'smartsupp'\n];\n\nconst has_live_chat = CHAT_PATTERNS.some(p => htmlLower.includes(p.toLowerCase()));\n\n// Detect contact form: look for <form> tags with email or message fields,\n// or common contact page patterns.\nconst hasFormTag = /<form[^>]*>/i.test(htmlStr);\nconst hasEmailInput = /type=[\"']email[\"']/i.test(htmlStr);\nconst hasMessageField = /name=[\"'](message|comments?|body|inquiry)[\"']/i.test(htmlStr);\nconst hasContactLink = /href=[\"'][^\"']*contact[^\"']*[\"']/i.test(htmlStr);\nconst contact_form_found = hasFormTag && (hasEmailInput || hasMessageField);\n\n// Extract the form action URL for submission (first form with an action attribute).\nlet form_action = null;\nconst formMatch = htmlStr.match(/<form[^>]*action=[\"']([^\"']+)[\"']/i);\nif (formMatch) {\n  try {\n    const record = $('Split Into Items').item.json;\n    const base = new URL(record.website.startsWith('http') ? record.website : 'https://' + record.website);\n    form_action = new URL(formMatch[1], base).toString();\n  } catch(e) {\n    form_action = formMatch[1];\n  }\n}\n\n// Extract input field names for form submission.\nconst nameFields = [];\nconst fieldRegex = /name=[\"']([^\"']+)[\"']/gi;\nlet match;\nwhile ((match = fieldRegex.exec(htmlStr)) !== null) {\n  nameFields.push(match[1]);\n}\n\nconst record = $('Split Into Items').item.json;\nreturn [{\n  json: {\n    ...record,\n    has_live_chat,\n    contact_form_found,\n    form_action,\n    form_fields: nameFields.slice(0, 20),\n    has_contact_link: hasContactLink,\n    audit_failed: false\n  }\n}];"
+      },
+      "id": "re_b_detect_signals",
+      "name": "Detect Live Chat & Contact Form",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [{
+            "leftValue": "={{ $json.contact_form_found }}",
+            "rightValue": true,
+            "operator": { "type": "boolean", "operation": "equals" }
+          }],
+          "combinator": "and"
+        }
+      },
+      "id": "re_b_if_form",
+      "name": "IF — Contact Form Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a POST body using common field name patterns found on the form.\n// Maps detected field names to plausible values.\nconst record = $input.item.json;\nconst fields = record.form_fields || [];\n\nconst NAME_PATTERNS = ['name', 'full_name', 'fullname', 'your-name', 'fname', 'first_name', 'contact_name'];\nconst EMAIL_PATTERNS = ['email', 'your-email', 'email-address', 'e-mail', 'contact_email'];\nconst PHONE_PATTERNS = ['phone', 'telephone', 'tel', 'phone_number', 'your-phone'];\nconst MESSAGE_PATTERNS = ['message', 'comments', 'comment', 'body', 'inquiry', 'question', 'msg'];\n\nconst payload = {};\nfor (const field of fields) {\n  const f = field.toLowerCase();\n  if (NAME_PATTERNS.some(p => f.includes(p))) payload[field] = 'Alex Thompson';\n  else if (EMAIL_PATTERNS.some(p => f.includes(p))) payload[field] = $env.INQUIRY_EMAIL_ALIAS || 'inquiry@example.com';\n  else if (PHONE_PATTERNS.some(p => f.includes(p))) payload[field] = '555-0100';\n  else if (MESSAGE_PATTERNS.some(p => f.includes(p))) payload[field] = 'Hi, I am interested in buying a home in your area and was hoping to get in touch with an agent. Could you please reach out when you have a chance? Thank you.';\n}\n\n// Fallback: always ensure email + message are present under common names.\nif (!payload.email && !payload['your-email']) payload.email = $env.INQUIRY_EMAIL_ALIAS || 'inquiry@example.com';\nif (!payload.message && !payload.comments) payload.message = 'Hi, I am interested in buying a home in your area. Please reach out when you have a chance. Thank you.';\n\nreturn [{ json: { ...record, inquiry_payload: payload, inquiry_sent_at: new Date().toISOString() } }];"
+      },
+      "id": "re_b_build_inquiry",
+      "name": "Build Inquiry Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.form_action }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Content-Type", "value": "application/x-www-form-urlencoded" },
+            { "name": "Referer", "value": "={{ $json.website }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.inquiry_payload) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "re_b_submit_inquiry",
+      "name": "Submit Inquiry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1960, 60],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Form submission succeeded — attach the inquiry timestamp from the build step.\nconst buildNode = $('Build Inquiry Payload').item.json;\nreturn [{ json: { ...buildNode, inquiry_submitted: true } }];"
+      },
+      "id": "re_b_inquiry_sent",
+      "name": "Mark Inquiry Sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, -20]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Submission failed (4xx/5xx or network error) — still record that we tried.\nconst buildNode = $('Build Inquiry Payload').item.json;\nreturn [{ json: { ...buildNode, inquiry_submitted: false } }];"
+      },
+      "id": "re_b_inquiry_failed",
+      "name": "Mark Inquiry Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 120]
+    },
+    {
+      "parameters": {
+        "jsCode": "// No contact form found — record that we couldn't send an inquiry.\nconst record = $input.item.json;\nreturn [{ json: { ...record, inquiry_submitted: false, inquiry_sent_at: null } }];"
+      },
+      "id": "re_b_no_form",
+      "name": "No Form — Skip Inquiry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 220]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { has_live_chat: $json.has_live_chat || false, contact_form_found: $json.contact_form_found || false, inquiry_sent_at: $json.inquiry_sent_at || null, status: 'Audited' } }) }}",
+        "options": {}
+      },
+      "id": "re_b_update_airtable",
+      "name": "Update Agent — Audited",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2400, 140],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nconst r = $input.item.json;\nconst chatStatus = r.has_live_chat ? '✅ Has live chat' : '❌ No live chat';\nconst formStatus = r.contact_form_found ? `✅ Form found${r.inquiry_submitted ? ' + inquiry sent' : ' (submit failed)'}` : '❌ No form';\nreturn [{ json: { slackUrl, slackBody: { text: `🔍 *RE Audit: ${r.agent_name || 'Unknown'}*\\n${chatStatus}\\n${formStatus}\\n📍 ${r.city}, ${r.state}` } } }];"
+      },
+      "id": "re_b_slack_msg",
+      "name": "Build Slack Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2620, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_b_slack",
+      "name": "Slack — Audit Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2840, 140]
+    },
+    {
+      "parameters": {},
+      "id": "re_b_error_trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 560]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *RE Workflow B Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
+      },
+      "id": "re_b_format_error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 560]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_b_error_slack",
+      "name": "Slack — Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 560]
+    }
+  ],
+  "connections": {
+    "Schedule — Every 6 Hours": { "main": [[{ "node": "Fetch Raw Agents", "type": "main", "index": 0 }]] },
+    "Fetch Raw Agents": { "main": [[{ "node": "IF — Records Found?", "type": "main", "index": 0 }]] },
+    "IF — Records Found?": {
+      "main": [
+        [{ "node": "Split Into Items", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Split Into Items": { "main": [[{ "node": "Fetch Website HTML", "type": "main", "index": 0 }]] },
+    "Fetch Website HTML": {
+      "main": [
+        [{ "node": "Detect Live Chat & Contact Form", "type": "main", "index": 0 }],
+        [{ "node": "Mark Fetch Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark Fetch Failed": { "main": [[{ "node": "Update Agent — Audited", "type": "main", "index": 0 }]] },
+    "Detect Live Chat & Contact Form": { "main": [[{ "node": "IF — Contact Form Found?", "type": "main", "index": 0 }]] },
+    "IF — Contact Form Found?": {
+      "main": [
+        [{ "node": "Build Inquiry Payload", "type": "main", "index": 0 }],
+        [{ "node": "No Form — Skip Inquiry", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Inquiry Payload": { "main": [[{ "node": "Submit Inquiry", "type": "main", "index": 0 }]] },
+    "Submit Inquiry": {
+      "main": [
+        [{ "node": "Mark Inquiry Sent", "type": "main", "index": 0 }],
+        [{ "node": "Mark Inquiry Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark Inquiry Sent": { "main": [[{ "node": "Update Agent — Audited", "type": "main", "index": 0 }]] },
+    "Mark Inquiry Failed": { "main": [[{ "node": "Update Agent — Audited", "type": "main", "index": 0 }]] },
+    "No Form — Skip Inquiry": { "main": [[{ "node": "Update Agent — Audited", "type": "main", "index": 0 }]] },
+    "Update Agent — Audited": { "main": [[{ "node": "Build Slack Alert", "type": "main", "index": 0 }]] },
+    "Build Slack Alert": { "main": [[{ "node": "Slack — Audit Complete", "type": "main", "index": 0 }]] },
+    "Error Trigger": { "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]] },
+    "Format Error": { "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "tags": ["re-pipeline", "audit"],
+  "meta": { "templateCredsSetupCompleted": false, "instanceId": "" }
+}

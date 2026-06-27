@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "roofing in Denver CO",
+    "roofing near Denver CO",
+    "best roofing in Denver CO",
+    "local roofing Denver CO",
+    "roofing services Denver CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}

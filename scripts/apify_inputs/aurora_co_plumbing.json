@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "plumbing in Aurora CO",
+    "plumbing near Aurora CO",
+    "best plumbing in Aurora CO",
+    "local plumbing Aurora CO",
+    "plumbing services Aurora CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}

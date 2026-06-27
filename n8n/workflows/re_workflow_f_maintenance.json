@@ -1,0 +1,245 @@
+{
+  "name": "RE Workflow F — Weekly Maintenance",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "30 23 * * 0" }]
+        }
+      },
+      "id": "re_f_schedule",
+      "name": "Schedule — Sunday 11:30pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "AND(OR({status}='Raw',{status}='Audited',{status}='Slow_Responder'),IS_BEFORE({date_added},DATEADD(TODAY(),-90,'days')))" },
+            { "name": "fields[]", "value": "agent_name" },
+            { "name": "fields[]", "value": "status" },
+            { "name": "fields[]", "value": "date_added" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_f_fetch_stale",
+      "name": "Fetch Stale Agents (90+ days)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [420, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nif (records.length === 0) return [];\nreturn records.map(r => ({ json: { record_id: r.id, agent_name: r.fields.agent_name } }));"
+      },
+      "id": "re_f_split_stale",
+      "name": "Split Stale Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"fields\": {\"status\": \"Archived\"}}",
+        "options": {}
+      },
+      "id": "re_f_archive",
+      "name": "Archive Stale Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [860, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "{status}='Raw'" },
+            { "name": "fields[]", "value": "status" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_f_count_raw",
+      "name": "Count Raw",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 160],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "{status}='Audited'" },
+            { "name": "fields[]", "value": "status" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_f_count_audited",
+      "name": "Count Audited",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "AND({status}='Slow_Responder',{outreach_triggered}=TRUE())" },
+            { "name": "fields[]", "value": "status" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_f_count_slow",
+      "name": "Count Slow Responders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 440],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "AND({status}='Pushed',IS_AFTER({date_pushed},DATEADD(TODAY(),-7,'days')))" },
+            { "name": "fields[]", "value": "ai_score" },
+            { "name": "fields[]", "value": "status" },
+            { "name": "fields[]", "value": "has_live_chat" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_f_count_pushed_week",
+      "name": "Count Pushed This Week",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 580],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawCount = ($('Count Raw').item.json.records || []).length;\nconst auditedCount = ($('Count Audited').item.json.records || []).length;\nconst slowCount = ($('Count Slow Responders').item.json.records || []).length;\nconst pushedWeekRecords = $input.item.json.records || [];\nconst pushedWeekCount = pushedWeekRecords.length;\n\nconst avgScore = pushedWeekCount > 0\n  ? (pushedWeekRecords.reduce((sum, r) => sum + (r.fields?.ai_score || 0), 0) / pushedWeekCount).toFixed(1)\n  : 'N/A';\n\nconst noLiveChatPct = auditedCount > 0\n  ? Math.round((slowCount / auditedCount) * 100)\n  : 0;\n\nconst slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) {\n  console.log('Slack not configured — skipping RE weekly report');\n  return [{ json: { skipped: true } }];\n}\n\nconst msg = `📊 *RE Weekly Pipeline Report*\\nRaw (unaudited): ${rawCount}\\nAudited: ${auditedCount}\\nSlow Responders (outreach sent): ${slowCount}\\nSlow-responder rate: ${noLiveChatPct}%\\nPushed to CRM this week: ${pushedWeekCount}\\nAvg score of pushed agents: ${avgScore}/10`;\nreturn [{ json: { slackUrl, slackBody: { text: msg } } }];"
+      },
+      "id": "re_f_build_report",
+      "name": "Build Weekly Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 580]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_f_slack",
+      "name": "Slack — Weekly Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1520, 580]
+    },
+    {
+      "parameters": {},
+      "id": "re_f_error_trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 760]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *RE Workflow F Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
+      },
+      "id": "re_f_format_error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 760]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_f_error_slack",
+      "name": "Slack — Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 760]
+    }
+  ],
+  "connections": {
+    "Schedule — Sunday 11:30pm": {
+      "main": [[
+        { "node": "Fetch Stale Agents (90+ days)", "type": "main", "index": 0 },
+        { "node": "Count Raw", "type": "main", "index": 0 }
+      ]]
+    },
+    "Fetch Stale Agents (90+ days)": { "main": [[{ "node": "Split Stale Records", "type": "main", "index": 0 }]] },
+    "Split Stale Records": { "main": [[{ "node": "Archive Stale Agent", "type": "main", "index": 0 }]] },
+    "Count Raw":           { "main": [[{ "node": "Count Audited",           "type": "main", "index": 0 }]] },
+    "Count Audited":       { "main": [[{ "node": "Count Slow Responders",   "type": "main", "index": 0 }]] },
+    "Count Slow Responders": { "main": [[{ "node": "Count Pushed This Week", "type": "main", "index": 0 }]] },
+    "Count Pushed This Week": { "main": [[{ "node": "Build Weekly Report",   "type": "main", "index": 0 }]] },
+    "Build Weekly Report": { "main": [[{ "node": "Slack — Weekly Report",   "type": "main", "index": 0 }]] },
+    "Error Trigger": { "main": [[{ "node": "Format Error",     "type": "main", "index": 0 }]] },
+    "Format Error":  { "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "tags": ["re-pipeline", "maintenance"],
+  "meta": { "templateCredsSetupCompleted": false, "instanceId": "" }
+}

@@ -1,0 +1,331 @@
+{
+  "name": "RE Workflow D — AI Scoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "30 */6 * * *" }]
+        }
+      },
+      "id": "re_d_schedule",
+      "name": "Schedule — Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "{status}='Slow_Responder'" },
+            { "name": "sort[0][field]", "value": "outreach_sent_at" },
+            { "name": "sort[0][direction]", "value": "asc" },
+            { "name": "maxRecords", "value": "25" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_d_fetch_slow",
+      "name": "Fetch Slow Responders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [420, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [{
+            "leftValue": "={{ $json.records.length }}",
+            "rightValue": 0,
+            "operator": { "type": "number", "operation": "larger" }
+          }],
+          "combinator": "and"
+        }
+      },
+      "id": "re_d_if_records",
+      "name": "IF — Records Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nreturn records.map(r => ({\n  json: {\n    record_id: r.id,\n    agent_name: r.fields.agent_name || '',\n    agency_name: r.fields.agency_name || '',\n    website: r.fields.website || '',\n    domain: r.fields.domain || '',\n    google_rating: r.fields.google_rating || null,\n    review_count: r.fields.review_count || 0,\n    has_live_chat: r.fields.has_live_chat || false,\n    contact_form_found: r.fields.contact_form_found || false,\n    response_time_minutes: r.fields.response_time_minutes || null,\n    city: r.fields.city || '',\n    state: r.fields.state || ''\n  }\n}));"
+      },
+      "id": "re_d_split",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 5 } },
+          "allowUnauthorizedCerts": true,
+          "response": { "response": { "fullResponse": false, "responseFormat": "text" } }
+        }
+      },
+      "id": "re_d_fetch_website",
+      "name": "Fetch Website Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 200],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $('Split Into Items').item.json;\nreturn [{ json: { ...record, ai_score: 0, ai_signals: 'Website fetch failed', ai_summary: 'Could not retrieve website content for scoring', website_fetch_status: 'Failed' } }];"
+      },
+      "id": "re_d_fetch_failed",
+      "name": "Mark Fetch Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\nconst record = $('Split Into Items').item.json;\nreturn [{ json: { ...record, website_text: text, website_fetch_status: 'Success' } }];"
+      },
+      "id": "re_d_extract_text",
+      "name": "Extract Text from HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $input.item.json;\n\nconst systemPrompt = `You are a lead qualification specialist for an agency that helps real estate agents convert more leads through live chat and instant response automation.\n\nYour job is to analyze a real estate agent's website and determine how likely they are to benefit from live chat and automated lead response services.\n\nHIGH-value targets (score 7-10) — agents who:\n- Have no live chat widget on their site\n- Show only a contact form or phone number (slow response likely)\n- Have no automated follow-up or scheduling system\n- Make no mention of CRM software like Follow Up Boss, Lofty, KVCore, BoomTown, or similar\n- Have static, brochure-style websites with no interactive elements\n- Are solo agents or small teams (more likely to be doing this manually)\n- Have good reviews but sparse website content suggesting they're too busy to invest in tech\n\nLOW-value targets (score 1-4) — agents who:\n- Already have a live chat widget\n- Advertise automated follow-up or instant response as a feature\n- Mention Follow Up Boss, Lofty, KVCore, BoomTown, Ylopo, Sierra Interactive, or other agent CRMs\n- Have online scheduling (Calendly, Acuity, built-in scheduler)\n- Are part of a large team or franchise that likely has enterprise tooling\n- Clearly operate at a tech-forward brokerage (eXp, Compass, etc. with tech built in)\n\nReturn ONLY valid JSON. No preamble, no markdown.`;\n\nconst userPrompt = `Analyze this real estate agent's website and score their need for live chat and automated lead response.\n\nAgent: ${record.agent_name}\nAgency: ${record.agency_name || 'Independent'}\nWebsite: ${record.website}\nGoogle Rating: ${record.google_rating || 'N/A'} (${record.review_count || 0} reviews)\nAudit results — Has live chat: ${record.has_live_chat}, Contact form found: ${record.contact_form_found}\n\nWebsite Content:\n\"\"\"\n${record.website_text || '(no content retrieved)'}\n\"\"\"\n\nReturn this exact JSON structure:\n{\n  \"score\": <integer 1-10>,\n  \"signals\": [<array of strings, each describing a specific signal found, max 5>],\n  \"summary\": \"<one sentence explaining why they need or don't need this service>\",\n  \"uses_crm\": <boolean>,\n  \"crm_mentioned\": \"<name of CRM if found, else null>\",\n  \"has_scheduler\": <boolean>,\n  \"is_solo_agent\": <boolean>\n}`;\n\nreturn [{ json: { ...record, claude_request_body: { model: 'claude-sonnet-4-6', max_tokens: 500, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] } } }];"
+      },
+      "id": "re_d_build_prompt",
+      "name": "Build Claude Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request_body) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "re_d_call_claude",
+      "name": "Call Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1740, 140],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": { "amount": 5, "unit": "seconds" },
+      "id": "re_d_retry_wait",
+      "name": "Wait 5s Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1960, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Claude Prompt').item.json.claude_request_body) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "re_d_call_claude_retry",
+      "name": "Call Claude API — Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2180, 380],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $('Build Claude Prompt').item.json;\nreturn [{ json: { ...record, ai_score: -1, ai_signals: 'Claude API Error — both attempts failed', ai_summary: 'Scoring unavailable due to API error' } }];"
+      },
+      "id": "re_d_claude_fallback",
+      "name": "Claude Error Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\nconst content = response.content?.[0]?.text || '';\nconst record = $('Build Claude Prompt').item.json;\n\nlet parsed;\ntry {\n  const clean = content.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch(e) {\n  parsed = { score: 0, signals: ['Parse error — Claude returned invalid JSON'], summary: 'Failed to parse Claude response', uses_crm: null, crm_mentioned: null, has_scheduler: null, is_solo_agent: null };\n}\n\nreturn [{ json: {\n  ...record,\n  ai_score: parsed.score || 0,\n  ai_signals: Array.isArray(parsed.signals) ? parsed.signals.join(', ') : '',\n  ai_summary: parsed.summary || '',\n  uses_crm: parsed.uses_crm || false,\n  crm_mentioned: parsed.crm_mentioned || null,\n  has_scheduler: parsed.has_scheduler || false,\n  is_solo_agent: parsed.is_solo_agent || false\n} }];"
+      },
+      "id": "re_d_parse_claude",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 140]
+    },
+    {
+      "parameters": { "amount": 2, "unit": "seconds" },
+      "id": "re_d_rate_limit",
+      "name": "Wait 2s — Rate Limit",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [2400, 140]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { ai_score: $json.ai_score, ai_signals: $json.ai_signals, ai_summary: $json.ai_summary, status: 'Scored', date_scored: new Date().toISOString().split('T')[0] } }) }}",
+        "options": {}
+      },
+      "id": "re_d_update_airtable",
+      "name": "Update Agent — Scored",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2620, 140],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nreturn [{ json: { slackUrl, slackBody: { text: '📊 *RE Workflow D — Agent Scored*\\nAI scoring run complete. Check Agents table for updated ai_score values.' } } }];"
+      },
+      "id": "re_d_slack_msg",
+      "name": "Build Completion Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2840, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_d_slack",
+      "name": "Slack — Scoring Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3060, 140]
+    },
+    {
+      "parameters": {},
+      "id": "re_d_error_trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 560]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *RE Workflow D Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
+      },
+      "id": "re_d_format_error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 560]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "re_d_error_slack",
+      "name": "Slack — Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 560]
+    }
+  ],
+  "connections": {
+    "Schedule — Every 6 Hours": { "main": [[{ "node": "Fetch Slow Responders", "type": "main", "index": 0 }]] },
+    "Fetch Slow Responders": { "main": [[{ "node": "IF — Records Found?", "type": "main", "index": 0 }]] },
+    "IF — Records Found?": {
+      "main": [
+        [{ "node": "Split Into Items", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Split Into Items": { "main": [[{ "node": "Fetch Website Content", "type": "main", "index": 0 }]] },
+    "Fetch Website Content": {
+      "main": [
+        [{ "node": "Extract Text from HTML", "type": "main", "index": 0 }],
+        [{ "node": "Mark Fetch Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark Fetch Failed": { "main": [[{ "node": "Update Agent — Scored", "type": "main", "index": 0 }]] },
+    "Extract Text from HTML": { "main": [[{ "node": "Build Claude Prompt", "type": "main", "index": 0 }]] },
+    "Build Claude Prompt": { "main": [[{ "node": "Call Claude API", "type": "main", "index": 0 }]] },
+    "Call Claude API": {
+      "main": [
+        [{ "node": "Parse Claude Response", "type": "main", "index": 0 }],
+        [{ "node": "Wait 5s Before Retry", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait 5s Before Retry": { "main": [[{ "node": "Call Claude API — Retry", "type": "main", "index": 0 }]] },
+    "Call Claude API — Retry": {
+      "main": [
+        [{ "node": "Parse Claude Response", "type": "main", "index": 0 }],
+        [{ "node": "Claude Error Fallback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Error Fallback": { "main": [[{ "node": "Update Agent — Scored", "type": "main", "index": 0 }]] },
+    "Parse Claude Response": { "main": [[{ "node": "Wait 2s — Rate Limit", "type": "main", "index": 0 }]] },
+    "Wait 2s — Rate Limit": { "main": [[{ "node": "Update Agent — Scored", "type": "main", "index": 0 }]] },
+    "Update Agent — Scored": { "main": [[{ "node": "Build Completion Message", "type": "main", "index": 0 }]] },
+    "Build Completion Message": { "main": [[{ "node": "Slack — Scoring Complete", "type": "main", "index": 0 }]] },
+    "Error Trigger": { "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]] },
+    "Format Error": { "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "tags": ["re-pipeline", "scoring"],
+  "meta": { "templateCredsSetupCompleted": false, "instanceId": "" }
+}

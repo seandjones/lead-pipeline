@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Triggers Apify actor runs for all JSON files in scripts/apify_inputs/.
+# Triggers Apify actor runs for all JSON files in scripts/re_apify_inputs/.
 #
 # Usage:
-#   bash scripts/trigger_apify_runs.sh               # regenerate inputs from .env, then trigger
-#   bash scripts/trigger_apify_runs.sh --skip-generate  # trigger existing files as-is
+#   bash scripts/trigger_re_apify_runs.sh               # regenerate inputs, then trigger
+#   bash scripts/trigger_re_apify_runs.sh --skip-generate  # trigger existing files as-is
 #
 # Apify actor used: compass/crawler-google-places
-# Find actor ID in Apify Console → Actors → search "Google Maps Scraper" → copy Actor ID from URL
+# This script is the RE vertical equivalent of trigger_apify_runs.sh.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-INPUTS_DIR="$SCRIPT_DIR/apify_inputs"
+INPUTS_DIR="$SCRIPT_DIR/re_apify_inputs"
 
 SKIP_GENERATE=false
 for arg in "$@"; do
@@ -25,15 +25,12 @@ set -a
 source "$ROOT_DIR/.env"
 set +a
 
-# Generate input files from TARGET_CITIES × TARGET_VERTICALS unless skipped
 if [[ "$SKIP_GENERATE" == false ]]; then
-  echo "Generating Apify input files from TARGET_CITIES and TARGET_VERTICALS..."
-  python3 "$SCRIPT_DIR/generate_apify_inputs.py"
+  echo "Generating RE Apify input files from TARGET_CITIES_RE..."
+  python3 "$SCRIPT_DIR/generate_re_apify_inputs.py"
   echo ""
 fi
 
-# Apify actor ID for "Google Maps Scraper" (compass/crawler-google-places)
-# Verify this in your Apify console — actor IDs are stable but confirm before running.
 ACTOR_ID="${APIFY_ACTOR_ID:-nwua9Gu5YkAVUScVsh}"
 
 if [[ -z "${APIFY_API_TOKEN:-}" ]]; then
@@ -42,7 +39,7 @@ if [[ -z "${APIFY_API_TOKEN:-}" ]]; then
 fi
 
 if [[ ! -d "$INPUTS_DIR" ]]; then
-  echo "ERROR: Apify inputs directory not found: $INPUTS_DIR"
+  echo "ERROR: RE Apify inputs directory not found: $INPUTS_DIR"
   exit 1
 fi
 
@@ -79,8 +76,7 @@ for input_file in "${INPUT_FILES[@]}"; do
   echo "  Status: $status"
   echo "  View at: https://console.apify.com/actors/${ACTOR_ID}/runs/${run_id}"
 
-  # Log run ID to file for traceability
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | $filename | $run_id | $status" >> "$ROOT_DIR/apify_runs.log"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | RE | $filename | $run_id | $status" >> "$ROOT_DIR/apify_runs.log"
 
   if [[ "$run_id" != "UNKNOWN" && "$run_id" != "PARSE_ERROR" ]]; then
     echo "  Waiting 5 seconds before next run..."
@@ -89,13 +85,13 @@ for input_file in "${INPUT_FILES[@]}"; do
 done
 
 echo ""
-echo "All runs triggered. Run log saved to: $ROOT_DIR/apify_runs.log"
+echo "All RE runs triggered. Run log saved to: $ROOT_DIR/apify_runs.log"
 echo ""
 echo "When runs complete, Apify will POST results to your n8n webhook:"
-echo "  https://${DOMAIN}/webhook/apify-webhook"
+echo "  https://${DOMAIN}/webhook/re-apify-webhook"
 echo ""
 echo "Configure this webhook in Apify Console:"
 echo "  Actor run → Settings → Webhooks → Add webhook"
 echo "  Event: ACTOR.RUN.SUCCEEDED"
-echo "  URL:   https://${DOMAIN}/webhook/apify-webhook"
+echo "  URL:   https://${DOMAIN}/webhook/re-apify-webhook"
 echo "  Header: X-Webhook-Secret: ${WEBHOOK_SECRET}"

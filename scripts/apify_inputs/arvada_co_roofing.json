@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "roofing in Arvada CO",
+    "roofing near Arvada CO",
+    "best roofing in Arvada CO",
+    "local roofing Arvada CO",
+    "roofing services Arvada CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}

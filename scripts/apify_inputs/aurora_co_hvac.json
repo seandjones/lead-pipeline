@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "HVAC in Aurora CO",
+    "HVAC near Aurora CO",
+    "best HVAC in Aurora CO",
+    "local HVAC Aurora CO",
+    "HVAC services Aurora CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}

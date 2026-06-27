@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "HVAC in Denver CO",
+    "HVAC near Denver CO",
+    "best HVAC in Denver CO",
+    "local HVAC Denver CO",
+    "HVAC services Denver CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "searchStringsArray": [
+    "roofing in Aurora CO",
+    "roofing near Aurora CO",
+    "best roofing in Aurora CO",
+    "local roofing Aurora CO",
+    "roofing services Aurora CO"
+  ],
+  "maxCrawledPlacesPerSearch": 200,
+  "language": "en",
+  "exportPlaceUrls": false,
+  "additionalInfo": false,
+  "maxReviews": 0,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": [
+      "RESIDENTIAL"
+    ]
+  }
+}
