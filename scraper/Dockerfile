@@ -44,9 +44,11 @@ COPY package.json .
 RUN npm install --omit=dev
 COPY index.js .
 
-RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
+RUN groupadd -r pptruser && useradd -r -m -g pptruser -G audio,video pptruser \
     && chown -R pptruser:pptruser /app
+
 USER pptruser
+RUN npx puppeteer browsers install chrome
 
 EXPOSE 3001
 CMD ["node", "index.js"]

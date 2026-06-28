@@ -900,3 +900,13 @@ docker compose down -v
 bash scripts/setup.sh
 # Then re-import workflows via n8n UI
 ```
+
+## n8n updates
+
+The system is fully reproducible from `.env` + workflow JSON files:
+
+```bash
+cd ~/lead-pipeline && \
+docker-compose pull n8n && \
+docker-compose up -d n8n 
+```
