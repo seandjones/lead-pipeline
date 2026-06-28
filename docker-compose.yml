@@ -56,10 +56,27 @@ services:
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
       TARGET_CITIES: ${TARGET_CITIES}
       TARGET_VERTICALS: ${TARGET_VERTICALS}
+      SCRAPER_URL: ${SCRAPER_URL}
+      SCRAPER_TIMEOUT_MS: ${SCRAPER_TIMEOUT_MS}
     volumes:
       - n8n_data:/home/node/.n8n
     ports:
       - "5678:5678"
+    networks:
+      - lead_pipeline_net
+
+  scraper:
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile
+    container_name: lead_pipeline_scraper
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      PORT: 3001
+      SCRAPER_TIMEOUT_MS: ${SCRAPER_TIMEOUT_MS}
+    volumes:
+      - /dev/shm:/dev/shm
     networks:
       - lead_pipeline_net
 

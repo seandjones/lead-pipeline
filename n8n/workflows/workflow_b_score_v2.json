@@ -1,0 +1,816 @@
+{
+  "name": "workflow_b_score_v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "200ab5c3-7acf-4c7a-a7ca-56500f8aeb14",
+      "name": "Schedule — Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [-1536, 32]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "AND({status}='Raw',{website_fetch_status}='Pending')" },
+            { "name": "sort[0][field]", "value": "date_added" },
+            { "name": "sort[0][direction]", "value": "asc" },
+            { "name": "maxRecords", "value": "25" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "707ccf65-b348-4795-9341-1778488f2b75",
+      "name": "Fetch Unscored Records",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-1312, 32],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nreturn records.map(r => ({\n  json: {\n    record_id: r.id,\n    business_name: r.fields.business_name || '',\n    website: r.fields.website || '',\n    domain: r.fields.domain || r.fields.website.split('/')[2] || '' ,\n    phone: r.fields.phone || '',\n    category: r.fields.category || '',\n    google_rating: r.fields.google_rating || null,\n    review_count: r.fields.review_count || 0\n  }\n}));"
+      },
+      "id": "1e4e0a99-51ba-405a-9af6-3b0217af6617",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-864, 32]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+            { "name": "Accept-Encoding", "value": "gzip, deflate, br" },
+            { "name": "Cache-Control", "value": "no-cache" }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "redirect": { "redirect": { "maxRedirects": 5 } },
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 15000
+        }
+      },
+      "id": "1a8bf575-d0df-4de8-a11d-f10da93e1ac0",
+      "name": "Fetch Website Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-640, 32],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME + '/' + $('Split Into Items').item.json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { website_fetch_status: 'Failed', status: 'Scored', ai_score: 0, ai_signals: 'Website fetch failed', ai_summary: 'Could not retrieve website content', date_scored: new Date().toISOString().split('T')[0] } }) }}",
+        "options": {}
+      },
+      "id": "0b5ab951-1e53-4ec2-ba0a-97ee29f01aa5",
+      "name": "Mark Fetch Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-416, 128],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\nconst JUNK_PATTERNS = [\n  /this domain is (for sale|parked|registered)/i,\n  /parked (by|with|at|on)/i,\n  /godaddy\\.com|namecheap\\.com|sedoparking\\.com|hugedomains\\.com/i,\n  /under construction/i,\n  /coming soon/i,\n  /cf-browser-verification|enable javascript and cookies to continue|checking your browser/i,\n  /ddos-guard|cloudflare ray id/i,\n  /access denied|403 forbidden|not found|404 error/i,\n  /^\\s*$/,\n];\n\nconst isThin = text.replace(/\\s/g, '').length < 150;\nconst isJunk = JUNK_PATTERNS.some(p => p.test(text));\n\nconst record = $('Split Into Items').item.json;\n\nif (isThin || isJunk) {\n  return { json: { ...record, website_text: text, website_fetch_status: 'ThinContent', raw_html: htmlStr.substring(0, 80000), raw_html_length: htmlStr.length } };\n}\n\nreturn { json: { ...record, website_text: text, website_fetch_status: 'Success', raw_html: htmlStr.substring(0, 80000) } };"
+      },
+      "id": "0891a160-3029-4d9d-a272-63bc3c0d0d5d",
+      "name": "Extract Text from HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-416, -64]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.website_fetch_status }}",
+              "rightValue": "ThinContent",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d5487461-f833-4f18-a112-13cc239b5cb8",
+      "name": "IF — Thin Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-192, -64]
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $input.item.json;\nlet altUrl = record.website || '';\ntry {\n  const u = new URL(altUrl);\n  if (u.hostname.startsWith('www.')) {\n    u.hostname = u.hostname.replace(/^www\\./, '');\n  } else {\n    u.hostname = 'www.' + u.hostname;\n  }\n  altUrl = u.toString();\n} catch(e) {}\nreturn [{ json: { ...record, alt_website: altUrl } }];"
+      },
+      "id": "0f8b460f-2145-43af-982b-845f2e023cb8",
+      "name": "Build Alt URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [32, -128]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.alt_website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "redirect": { "redirect": { "maxRedirects": 5 } },
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 15000
+        }
+      },
+      "id": "debe3eb4-cfc6-4d95-8a3b-fb34bc868112",
+      "name": "Fetch Alt URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [256, -128],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\nconst prevRecord = $('Build Alt URL').item.json;\nconst originalText = prevRecord.website_text || '';\n\nconst finalText = text.length > originalText.length ? text : originalText;\nconst fetchStatus = finalText.replace(/\\s/g, '').length >= 150 ? 'Success' : 'ThinContent';\n\nconst rawHtml = htmlStr.length > (prevRecord.raw_html || '').length ? htmlStr.substring(0, 80000) : (prevRecord.raw_html || '');\n\nreturn [{ json: { ...prevRecord, website_text: finalText, website_fetch_status: fetchStatus, raw_html: rawHtml } }];"
+      },
+      "id": "b82f3620-2286-47bf-bd61-62365e80d12c",
+      "name": "Merge Alt Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, -208]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record = $input.item.json;\nconst html = record.raw_html || '';\n\n// 1. Extract mailto: links — most reliable signal\nconst mailtoEmails = [...html.matchAll(/mailto:([a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})/gi)]\n  .map(m => m[1].toLowerCase().trim());\n\n// 2. Regex scan visible text for email patterns\nconst textEmails = [...html.matchAll(/\\b([a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})\\b/g)]\n  .map(m => m[1].toLowerCase().trim())\n  .filter(e => {\n    if (/\\.(png|jpg|jpeg|gif|svg|woff|ttf|eot)$/.test(e)) return false;\n    if (/example\\.com|sentry\\.io|googleapis\\.com|gstatic\\.com|w3\\.org/.test(e)) return false;\n    if (/^(noreply|no-reply|donotreply|postmaster|mailer-daemon)@/.test(e)) return false;\n    return true;\n  });\n\n// 3. Merge, de-dup, prefer priority patterns\nconst allEmails = [...new Set([...mailtoEmails, ...textEmails])];\nconst PRIORITY = /^(owner|info|hello|contact|office|admin|team|sales|support|enquir|enquiry|general|service)@/i;\n\nlet homepageEmail = null;\nlet confidence = 0;\nlet sourceType = 'none';\n\nif (allEmails.length > 0) {\n  const priorityMatch = allEmails.find(e => PRIORITY.test(e));\n  homepageEmail = priorityMatch || allEmails[0];\n  confidence = mailtoEmails.includes(homepageEmail) ? 85 : 60;\n  sourceType = 'homepage';\n}\n\n// 4. Phone extraction\nconst phoneMatches = [...html.matchAll(/\\b(\\(?\\d{3}\\)?[\\s.\\-]?\\d{3}[\\s.\\-]?\\d{4})\\b/g)]\n  .map(m => m[1].replace(/[^\\d]/g, ''))\n  .filter(p => p.length === 10)\n  .map(p => `(${p.slice(0,3)}) ${p.slice(3,6)}-${p.slice(6)}`);\nconst scrapedPhone = phoneMatches[0] || null;\n\n// 5. JS-heavy detection: minimal useful text + many script tags\nconst usefulTextLength = (record.website_text || '').replace(/\\s/g, '').length;\nconst scriptTagCount = (html.match(/<script/gi) || []).length;\nconst isJsHeavy = usefulTextLength < 200 && scriptTagCount > 5;\n\nreturn [{\n  json: {\n    ...record,\n    homepage_email: homepageEmail,\n    best_email: homepageEmail,\n    email_confidence: confidence,\n    source_type: sourceType,\n    source_url: homepageEmail ? record.website : null,\n    scraped_phone: scrapedPhone,\n    is_js_heavy: isJsHeavy,\n    all_homepage_emails: allEmails.slice(0, 5)\n  }\n}];"
+      },
+      "id": "e1a2b3c4-d5e6-7890-abcd-ef1234567890",
+      "name": "Extract Emails — Homepage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [704, -64]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.homepage_email !== null && $json.homepage_email !== '' }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-012345678901",
+      "name": "IF — Has Homepage Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [928, -64]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record = $input.item.json;\nconst html = record.raw_html || '';\nconst baseUrl = record.website || '';\n\nlet baseOrigin = '';\ntry { baseOrigin = new URL(baseUrl).origin; } catch(e) {}\n\nconst hrefMatches = [...html.matchAll(/href=[\"']([^\"'#?]+)[\"']/gi)].map(m => m[1]);\n\nconst CONTACT_KEYWORDS = [\n  { re: /\\/(contact|contacts|contact-us|contactus|contact_us|reach-us|get-in-touch)/i, score: 100 },\n  { re: /\\/(about|about-us|aboutus|about_us|about-the-company)/i, score: 70 },\n  { re: /\\/(team|staff|people|meet-us|our-team|meet-the-team)/i, score: 60 },\n  { re: /\\/(support|help|helpdesk)/i, score: 30 },\n];\n\nconst scored = [];\nfor (const href of hrefMatches) {\n  let url;\n  try {\n    url = href.startsWith('http') ? href : new URL(href, baseOrigin).toString();\n  } catch(e) { continue; }\n  if (baseOrigin && !url.startsWith(baseOrigin)) continue;\n  if (/\\.(pdf|jpg|jpeg|png|gif|svg|zip|doc|docx|mp4|mp3)$/i.test(url)) continue;\n  let score = 0;\n  for (const { re, score: s } of CONTACT_KEYWORDS) {\n    if (re.test(url)) { score = s; break; }\n  }\n  if (score > 0) scored.push({ url, score });\n}\n\nconst unique = Object.values(\n  scored.reduce((acc, item) => {\n    if (!acc[item.url] || acc[item.url].score < item.score) acc[item.url] = item;\n    return acc;\n  }, {})\n);\nunique.sort((a, b) => b.score - a.score);\nconst candidates = unique.slice(0, 3).map(i => i.url);\n\nreturn [{\n  json: {\n    ...record,\n    contact_url_candidates: JSON.stringify(candidates),\n    contact_url_to_fetch: candidates[0] || null\n  }\n}];"
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+      "name": "Find Contact Page Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1152, 64]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.contact_url_to_fetch !== null && $json.contact_url_to_fetch !== '' }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-a7b8-9012-cdef-345678901234",
+      "name": "IF — Has Contact URL?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1376, 64]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.contact_url_to_fetch }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+            { "name": "Accept-Encoding", "value": "gzip, deflate, br" },
+            { "name": "Cache-Control", "value": "no-cache" }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "redirect": { "redirect": { "maxRedirects": 5 } },
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 15000
+        }
+      },
+      "id": "d4e5f6a7-b8c9-0123-defa-456789012345",
+      "name": "Fetch Contact Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1600, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Contact page fetch failed — continue with existing record unchanged\nreturn [{ json: $('Find Contact Page Links').item.json }];"
+      },
+      "id": "e5f6a7b8-c9d0-1234-efab-567890123456",
+      "name": "Contact Fetch Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 160]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\nconst prevRecord = $('Find Contact Page Links').item.json;\n\nconst mailtoEmails = [...htmlStr.matchAll(/mailto:([a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})/gi)]\n  .map(m => m[1].toLowerCase().trim());\n\nconst textEmails = [...htmlStr.matchAll(/\\b([a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})\\b/g)]\n  .map(m => m[1].toLowerCase().trim())\n  .filter(e => {\n    if (/\\.(png|jpg|jpeg|gif|svg|woff|ttf|eot)$/.test(e)) return false;\n    if (/example\\.com|sentry\\.io|googleapis\\.com|gstatic\\.com|w3\\.org/.test(e)) return false;\n    if (/^(noreply|no-reply|donotreply|postmaster|mailer-daemon)@/.test(e)) return false;\n    return true;\n  });\n\nconst allEmails = [...new Set([...mailtoEmails, ...textEmails])];\nconst PRIORITY = /^(owner|info|hello|contact|office|admin|team|sales|support|enquir|enquiry|general|service)@/i;\n\nlet bestEmail = prevRecord.best_email || null;\nlet confidence = prevRecord.email_confidence || 0;\nlet sourceType = prevRecord.source_type || 'none';\nlet sourceUrl = prevRecord.source_url || null;\nlet contactPageEmail = null;\n\nif (allEmails.length > 0) {\n  const priorityMatch = allEmails.find(e => PRIORITY.test(e));\n  contactPageEmail = priorityMatch || allEmails[0];\n  const contactConfidence = mailtoEmails.includes(contactPageEmail) ? 95 : 75;\n  if (contactConfidence > confidence) {\n    bestEmail = contactPageEmail;\n    confidence = contactConfidence;\n    sourceType = 'cheerio_contact';\n    sourceUrl = prevRecord.contact_url_to_fetch;\n  }\n}\n\n// Extract phone from contact page\nconst phoneMatches = [...htmlStr.matchAll(/\\b(\\(?\\d{3}\\)?[\\s.\\-]?\\d{3}[\\s.\\-]?\\d{4})\\b/g)]\n  .map(m => m[1].replace(/[^\\d]/g, ''))\n  .filter(p => p.length === 10)\n  .map(p => `(${p.slice(0,3)}) ${p.slice(3,6)}-${p.slice(6)}`);\nconst scrapedPhone = phoneMatches[0] || prevRecord.scraped_phone || null;\n\n// Detect JS-heavy from contact page too\nconst usefulText = htmlStr.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '').replace(/<[^>]+>/g, ' ').trim();\nconst isJsHeavy = prevRecord.is_js_heavy || (usefulText.length < 200 && allEmails.length === 0);\n\nreturn [{\n  json: {\n    ...prevRecord,\n    contact_page_email: contactPageEmail,\n    best_email: bestEmail,\n    email_confidence: confidence,\n    source_type: sourceType,\n    source_url: sourceUrl,\n    scraped_phone: scrapedPhone,\n    is_js_heavy: isJsHeavy\n  }\n}];"
+      },
+      "id": "f6a7b8c9-d0e1-2345-fabc-678901234567",
+      "name": "Extract Emails — Contact Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1824, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.best_email }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7b8c9d0-e1f2-3456-abcd-789012345678",
+      "name": "IF — Has Email? (Post-Contact)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2048, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_js_heavy === true }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b8c9d0e1-f2a3-4567-bcde-890123456789",
+      "name": "IF — JS-Heavy Site?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2272, 128]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCRAPER_URL + '/scrape' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.contact_url_to_fetch || $json.website }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c9d0e1f2-a3b4-5678-cdef-901234567890",
+      "name": "Call Puppeteer Microservice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2496, 64],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const puppeteerResult = $input.item.json;\nconst prevRecord = $('IF — JS-Heavy Site?').item.json;\n\nconst html = puppeteerResult.html || '';\nconst puppeteerError = puppeteerResult.error || null;\n\nif (puppeteerError || !html) {\n  return [{ json: { ...prevRecord, puppeteer_failed: true } }];\n}\n\nconst mailtoEmails = [...html.matchAll(/mailto:([a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})/gi)]\n  .map(m => m[1].toLowerCase().trim());\n\nconst textEmails = [...html.matchAll(/\\b([a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})\\b/g)]\n  .map(m => m[1].toLowerCase().trim())\n  .filter(e => {\n    if (/\\.(png|jpg|jpeg|gif|svg|woff|ttf|eot)$/.test(e)) return false;\n    if (/example\\.com|sentry\\.io|googleapis\\.com|gstatic\\.com|w3\\.org/.test(e)) return false;\n    if (/^(noreply|no-reply|donotreply|postmaster|mailer-daemon)@/.test(e)) return false;\n    return true;\n  });\n\nconst allEmails = [...new Set([...mailtoEmails, ...textEmails])];\nconst PRIORITY = /^(owner|info|hello|contact|office|admin|team|sales|support|enquir|enquiry|general|service)@/i;\nconst priorityMatch = allEmails.find(e => PRIORITY.test(e));\nconst foundEmail = priorityMatch || allEmails[0] || null;\n\nconst phoneMatches = [...html.matchAll(/\\b(\\(?\\d{3}\\)?[\\s.\\-]?\\d{3}[\\s.\\-]?\\d{4})\\b/g)]\n  .map(m => m[1].replace(/[^\\d]/g, ''))\n  .filter(p => p.length === 10)\n  .map(p => `(${p.slice(0,3)}) ${p.slice(3,6)}-${p.slice(6)}`);\n\nreturn [{\n  json: {\n    ...prevRecord,\n    best_email: foundEmail || prevRecord.best_email || null,\n    email_confidence: foundEmail ? 80 : (prevRecord.email_confidence || 0),\n    source_type: foundEmail ? 'puppeteer_contact' : prevRecord.source_type,\n    source_url: foundEmail ? (puppeteerResult.finalUrl || prevRecord.contact_url_to_fetch) : prevRecord.source_url,\n    scraped_phone: phoneMatches[0] || prevRecord.scraped_phone || null,\n    puppeteer_failed: false\n  }\n}];"
+      },
+      "id": "d0e1f2a3-b4c5-6789-defa-012345678901",
+      "name": "Extract Emails from Puppeteer HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2720, 64]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Puppeteer call errored — continue with record unchanged toward domain guess\nreturn [{ json: $('IF — JS-Heavy Site?').item.json }];"
+      },
+      "id": "e1f2a3b4-c5d6-7890-efab-123456789012",
+      "name": "Puppeteer Error — Continue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2720, 224]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record = $input.item.json;\nconst domain = record.domain || '';\n\nif (!domain || record.best_email) {\n  return [{ json: { ...record, source_type: record.source_type || 'none', email_confidence: record.email_confidence || 0 } }];\n}\n\nconst guesses = [\n  `info@${domain}`,\n  `contact@${domain}`,\n  `office@${domain}`\n];\n\n// Domain guesses are unverified — passed to Claude as context only.\n// best_email stays null to distinguish guesses from verified finds.\nreturn [{\n  json: {\n    ...record,\n    domain_email_guesses: guesses,\n    best_email: null,\n    source_type: 'domain_guess',\n    email_confidence: 15\n  }\n}];"
+      },
+      "id": "f2a3b4c5-d6e7-8901-fabc-234567890123",
+      "name": "Domain Email Guess Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2944, 288]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record = $input.item.json;\n\nconst verifiedEmail = record.best_email || null;\nconst homepageEmail = record.homepage_email || (record.source_type === 'homepage' ? verifiedEmail : null) || null;\nconst contactPageEmail = record.contact_page_email || ((['cheerio_contact','puppeteer_contact'].includes(record.source_type)) ? verifiedEmail : null) || null;\n\n// Only overwrite phone field if Airtable currently has no phone\nconst finalPhone = record.phone || record.scraped_phone || null;\n\nreturn [{\n  json: {\n    ...record,\n    homepage_email: homepageEmail,\n    contact_page_email: contactPageEmail,\n    best_email: verifiedEmail,\n    phone: finalPhone,\n    scrape_status: verifiedEmail ? 'Success' : 'NoEmail',\n    last_scraped_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a3b4c5d6-e7f8-9012-abcd-345678901234",
+      "name": "Merge Email Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3168, 0]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { homepage_email: $json.homepage_email || '', contact_page_email: $json.contact_page_email || '', source_url: $json.source_url || '', source_type: $json.source_type || 'none', scrape_status: $json.scrape_status || 'NoEmail', email_confidence: $json.email_confidence || 0, contact_url_candidates: $json.contact_url_candidates || '', last_scraped_at: $json.last_scraped_at || new Date().toISOString(), ...($json.scraped_phone && !$('Split Into Items').item.json.phone ? { phone: $json.scraped_phone } : {}) } }) }}",
+        "options": {}
+      },
+      "id": "b4c5d6e7-f8a9-0123-bcde-456789012345",
+      "name": "PATCH Airtable — Scrape Fields",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3392, 0],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record = $input.item.json;\n\nconst systemPrompt = `You are a lead qualification specialist for an AI automation agency that sells workflow automation to small trades businesses (HVAC, plumbing, roofing contractors).\nYour job is to analyze a business website and determine how likely that business is to need and benefit from automation services.\n\nHIGH-value targets are businesses that:\n- Have no online booking or scheduling system\n- List only a phone number as their contact method with no form or chat\n- Have vague, sparse service descriptions suggesting no structured processes\n- Make no mention of software, apps, CRM, or customer portals\n- Have emergency/24-7 claims but no automated system to back it up\n- Show signs of being run manually (e.g. \"call for a quote\", \"we'll get back to you\")\n- Have generic, template-looking websites with minimal custom content\n- Have no discoverable email address (phone-only contact is the strongest signal)\n\nLOW-value targets are businesses that:\n- Mention ServiceTitan, Housecall Pro, Jobber, or other trades software\n- Have an embedded booking widget or online scheduling\n- Actively advertise their use of technology as a selling point\n- Are clearly a franchise or large chain (likely already automated)\n\nYou must return ONLY a valid JSON object. No preamble, no explanation, no markdown.`;\n\nconst emailContext = (() => {\n  if (record.best_email) {\n    return `Contact email found on ${record.source_type}: ${record.best_email} (confidence: ${record.email_confidence || 0}%)`;\n  }\n  if (record.domain_email_guesses && record.domain_email_guesses.length) {\n    return `No email found on website. Domain guesses (unverified): ${record.domain_email_guesses.join(', ')}. Phone-only contact — prime automation target.`;\n  }\n  return `No contact email found anywhere on site. No visible contact method except phone — strong automation signal.`;\n})();\n\nconst userPrompt = `Analyze this trades business website and score it.\n\nBusiness: ${record.business_name}\nCategory: ${record.category || 'Unknown'}\nWebsite URL: ${record.website}\nContact Info: ${emailContext}\nPhone on website: ${record.scraped_phone || record.phone || 'None found'}\n\nWebsite Content:\n\"\"\"\n${record.website_text || '(no content retrieved)'}\n\"\"\"\n\nReturn this exact JSON structure:\n{\n  \"score\": <integer 1-10>,\n  \"signals\": [<array of strings, each describing a specific signal found, max 5>],\n  \"summary\": \"<one sentence explaining the score>\",\n  \"has_booking_system\": <boolean>,\n  \"mentions_software\": <boolean>,\n  \"software_mentioned\": \"<name of software if found, else null>\",\n  \"contact_method_assessment\": \"<one of: email_only, phone_only, both, none, booking_widget>\"\n}`;\n\nreturn { json: { ...record, claude_request_body: { model: 'claude-sonnet-4-6', max_tokens: 600, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] } } };"
+      },
+      "id": "3ba6499d-0f3f-47f0-b5ab-e9c2c47ea2be",
+      "name": "Build Claude Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3616, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request_body) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "756716a7-a02a-4b5c-a29f-393e69b822b9",
+      "name": "Call Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3840, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "b36e81f4-2387-4e2c-a06d-378ea13762bc",
+      "name": "Wait 5s Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [4064, 80],
+      "webhookId": "cc023f32-ae0d-43e0-ba28-425cd80cd1e6"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Claude Prompt').item.json.claude_request_body) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "e2d2fe9b-62ae-475c-9c31-0dddd88f79f1",
+      "name": "Call Claude API — Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [4288, 80],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prevRecord = $('Build Claude Prompt').item.json;\nreturn [{ json: { ...prevRecord, ai_score: -1, ai_signals: 'Claude API Error — both attempts failed', ai_summary: 'Scoring unavailable due to API error', website_fetch_status: prevRecord.website_fetch_status || 'Success', contact_method_assessment: '' } }];"
+      },
+      "id": "b70721eb-7c8b-48bd-a39a-5154706bf77c",
+      "name": "Claude Error Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4736, 144]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const response = $input.item.json;\nconst content = response.content?.[0]?.text || '';\nconst prevRecord = $('Build Claude Prompt').item.json;\n\nlet parsed;\ntry {\n  const clean = content.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch(e) {\n  parsed = { score: 0, signals: ['Parse error — Claude returned invalid JSON'], summary: 'Failed to parse Claude response', has_booking_system: null, mentions_software: null, software_mentioned: null, contact_method_assessment: '' };\n}\n\nreturn { json: { ...prevRecord, ai_score: parsed.score || 0, ai_signals: Array.isArray(parsed.signals) ? parsed.signals.join(', ') : '', ai_summary: parsed.summary || '', has_booking_system: parsed.has_booking_system, mentions_software: parsed.mentions_software, software_mentioned: parsed.software_mentioned, contact_method_assessment: parsed.contact_method_assessment || '', website_fetch_status: prevRecord.website_fetch_status || 'Success' } };"
+      },
+      "id": "0a555d5d-b771-4233-9004-385a843e87e1",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4512, -80]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "eeff7d6a-46ae-484d-9cc3-0573266f2980",
+      "name": "Wait 2s — Rate Limit",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [4736, -80],
+      "webhookId": "5e160f65-52e1-4907-b0fe-6ce59a6cc3be"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { ai_score: $json.ai_score, ai_signals: $json.ai_signals, ai_summary: $json.ai_summary, contact_method_assessment: $json.contact_method_assessment || '', website_fetch_status: $json.website_fetch_status, status: 'Scored', date_scored: new Date().toISOString().split('T')[0], domain: $json.domain } }) }}",
+        "options": {}
+      },
+      "id": "a02cbbc1-d823-44b9-bc73-aa14f8ba800d",
+      "name": "Update Airtable Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [4960, -80],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nreturn [{ json: { slackUrl, slackBody: { text: '📊 *Workflow B v2 — Record Scored*\\nAI scoring run in progress. Check Airtable Scored records for updated ai_score and email scraping results.' } } }];"
+      },
+      "id": "f21e2ad5-c12e-436a-8028-8bf7f9864433",
+      "name": "Build Completion Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5184, -80]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [5408, -80],
+      "id": "14fac829-f39d-4db1-8f81-111e456534fe",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.data[0].slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.data[0].slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "ac8862cd-4a78-4408-8ff3-338f33351145",
+      "name": "Slack — Scoring Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [5632, -80]
+    },
+    {
+      "parameters": {},
+      "id": "1d6f71cd-4a42-45c0-917a-ca3a8cc451f0",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [-1536, 352]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *Workflow B v2 Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
+      },
+      "id": "e6bf0225-c8e7-48ea-a14d-9f8930cc81cb",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1312, 352]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "1616f746-1453-4173-83b2-4b3289129cf9",
+      "name": "Slack — Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-1088, 352]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "c8f7df89-5e5b-45f4-9928-34f9c8fceb90",
+              "leftValue": "={{ Array.isArray($json.records) && $json.records.length > 0  }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-1088, 32],
+      "id": "a3dbd475-3358-430e-a6c8-66b99bf017cc",
+      "name": "If -- Records Found?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule — Every 6 Hours": {
+      "main": [[{ "node": "Fetch Unscored Records", "type": "main", "index": 0 }]]
+    },
+    "Fetch Unscored Records": {
+      "main": [[{ "node": "If -- Records Found?", "type": "main", "index": 0 }]]
+    },
+    "If -- Records Found?": {
+      "main": [[{ "node": "Split Into Items", "type": "main", "index": 0 }]]
+    },
+    "Split Into Items": {
+      "main": [[{ "node": "Fetch Website Content", "type": "main", "index": 0 }]]
+    },
+    "Fetch Website Content": {
+      "main": [
+        [{ "node": "Extract Text from HTML", "type": "main", "index": 0 }],
+        [{ "node": "Mark Fetch Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Text from HTML": {
+      "main": [[{ "node": "IF — Thin Content?", "type": "main", "index": 0 }]]
+    },
+    "IF — Thin Content?": {
+      "main": [
+        [{ "node": "Build Alt URL", "type": "main", "index": 0 }],
+        [{ "node": "Extract Emails — Homepage", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Alt URL": {
+      "main": [[{ "node": "Fetch Alt URL", "type": "main", "index": 0 }]]
+    },
+    "Fetch Alt URL": {
+      "main": [
+        [{ "node": "Merge Alt Content", "type": "main", "index": 0 }],
+        [{ "node": "Extract Emails — Homepage", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge Alt Content": {
+      "main": [[{ "node": "Extract Emails — Homepage", "type": "main", "index": 0 }]]
+    },
+    "Extract Emails — Homepage": {
+      "main": [[{ "node": "IF — Has Homepage Email?", "type": "main", "index": 0 }]]
+    },
+    "IF — Has Homepage Email?": {
+      "main": [
+        [{ "node": "Merge Email Results", "type": "main", "index": 0 }],
+        [{ "node": "Find Contact Page Links", "type": "main", "index": 0 }]
+      ]
+    },
+    "Find Contact Page Links": {
+      "main": [[{ "node": "IF — Has Contact URL?", "type": "main", "index": 0 }]]
+    },
+    "IF — Has Contact URL?": {
+      "main": [
+        [{ "node": "Fetch Contact Page", "type": "main", "index": 0 }],
+        [{ "node": "IF — JS-Heavy Site?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Contact Page": {
+      "main": [
+        [{ "node": "Extract Emails — Contact Page", "type": "main", "index": 0 }],
+        [{ "node": "Contact Fetch Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Contact Fetch Failed": {
+      "main": [[{ "node": "IF — JS-Heavy Site?", "type": "main", "index": 0 }]]
+    },
+    "Extract Emails — Contact Page": {
+      "main": [[{ "node": "IF — Has Email? (Post-Contact)", "type": "main", "index": 0 }]]
+    },
+    "IF — Has Email? (Post-Contact)": {
+      "main": [
+        [{ "node": "Merge Email Results", "type": "main", "index": 0 }],
+        [{ "node": "IF — JS-Heavy Site?", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF — JS-Heavy Site?": {
+      "main": [
+        [{ "node": "Call Puppeteer Microservice", "type": "main", "index": 0 }],
+        [{ "node": "Domain Email Guess Fallback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Call Puppeteer Microservice": {
+      "main": [
+        [{ "node": "Extract Emails from Puppeteer HTML", "type": "main", "index": 0 }],
+        [{ "node": "Puppeteer Error — Continue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Emails from Puppeteer HTML": {
+      "main": [[{ "node": "Merge Email Results", "type": "main", "index": 0 }]]
+    },
+    "Puppeteer Error — Continue": {
+      "main": [[{ "node": "Domain Email Guess Fallback", "type": "main", "index": 0 }]]
+    },
+    "Domain Email Guess Fallback": {
+      "main": [[{ "node": "Merge Email Results", "type": "main", "index": 0 }]]
+    },
+    "Merge Email Results": {
+      "main": [[{ "node": "PATCH Airtable — Scrape Fields", "type": "main", "index": 0 }]]
+    },
+    "PATCH Airtable — Scrape Fields": {
+      "main": [
+        [{ "node": "Build Claude Prompt", "type": "main", "index": 0 }],
+        [{ "node": "Build Claude Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Claude Prompt": {
+      "main": [[{ "node": "Call Claude API", "type": "main", "index": 0 }]]
+    },
+    "Call Claude API": {
+      "main": [
+        [{ "node": "Parse Claude Response", "type": "main", "index": 0 }],
+        [{ "node": "Wait 5s Before Retry", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait 5s Before Retry": {
+      "main": [[{ "node": "Call Claude API — Retry", "type": "main", "index": 0 }]]
+    },
+    "Call Claude API — Retry": {
+      "main": [
+        [{ "node": "Parse Claude Response", "type": "main", "index": 0 }],
+        [{ "node": "Claude Error Fallback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Claude Response": {
+      "main": [[{ "node": "Wait 2s — Rate Limit", "type": "main", "index": 0 }]]
+    },
+    "Wait 2s — Rate Limit": {
+      "main": [[{ "node": "Update Airtable Record", "type": "main", "index": 0 }]]
+    },
+    "Claude Error Fallback": {
+      "main": [[{ "node": "Update Airtable Record", "type": "main", "index": 0 }]]
+    },
+    "Update Airtable Record": {
+      "main": [[{ "node": "Build Completion Message", "type": "main", "index": 0 }]]
+    },
+    "Build Completion Message": {
+      "main": [[{ "node": "Aggregate", "type": "main", "index": 0 }]]
+    },
+    "Aggregate": {
+      "main": [[{ "node": "Slack — Scoring Complete", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]]
+    },
+    "Format Error": {
+      "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "TOWaGImkZCSVApoX",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "b5c0d1e2-f3a4-5678-bcde-901234567890",
+  "meta": {
+    "instanceId": "8144db7907c816170629971836b96cd89a9c228a0e6f7a76bd886fc19afc627f"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

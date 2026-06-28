@@ -3,9 +3,9 @@
 Automated lead pipeline with two independent verticals running on the same n8n instance:
 
 - **Service Businesses** — HVAC, plumbing, roofing, dental, legal, veterinary, etc. Identifies candidates for AI automation services based on website signals.
-- **Real Estate Agents** — Targets agents in affluent markets who lack live chat and respond slowly to inquiries. Sends automated outreach if they don't reply within 15 minutes.
+- **Real Estate Agents** — Targets agents in affluent markets who lack live chat and respond slowly to inquiries. Sends automated email outreach if they don't reply within 15 minutes.
 
-**Stack:** n8n · Apify · Airtable · Hunter.io · Apollo.io · Claude API · HubSpot · Twilio · SendGrid · Docker + Nginx
+**Stack:** n8n · Apify · Airtable · Hunter.io · Apollo.io · Claude API · HubSpot · SendGrid · Docker + Nginx
 
 ---
 
@@ -16,8 +16,8 @@ Automated lead pipeline with two independent verticals running on the same n8n i
 - Docker Engine ≥ 24.x
 - Docker Compose ≥ 2.x
 - Accounts and API keys for: Apify, Airtable, Hunter.io, Apollo.io, Anthropic, HubSpot
-- *(RE vertical only)* Twilio account (for SMS outreach) and SendGrid account (for email outreach)
-- *(RE vertical only)* An email domain with inbound parse configured (SendGrid, Mailgun, or Postmark) for reply detection
+- *(RE vertical only)* SendGrid account (for email outreach)
+- *(RE vertical only)* An email domain with inbound parse configured (SendGrid, Mailgun, or Postmark) for reply and opt-out detection
 
 ---
 
@@ -64,7 +64,7 @@ docker restart lead_pipeline_nginx
 2. Go to **Settings → Import Workflow**
 3. Import the **service business** workflows in order:
    - `workflow_a_ingest.json`
-   - `workflow_b_score.json`
+   - `workflow_b_score_v2.json` *(enhanced version with email scraping — replaces `workflow_b_score.json`)*
    - `workflow_c_enrich_push.json`
    - `workflow_d_maintenance.json`
 4. Import the **real estate** workflows (see the [Real Estate Agents Vertical](#real-estate-agents-vertical) section for full setup before activating):
@@ -171,6 +171,24 @@ Create these fields manually or via the Airtable API:
 | `apify_run_id` | Single line text | |
 | `notes` | Long text | |
 
+### Email scraping fields (added by Workflow B v2)
+
+These fields are written automatically by the enhanced Workflow B email scraper. Add them to the `Leads` table before activating `workflow_b_score_v2.json`:
+
+| Field Name | Field Type | Notes |
+|---|---|---|
+| `homepage_email` | Email | Email found directly on the homepage (mailto links or visible text) |
+| `contact_page_email` | Email | Email found on a contact/about page |
+| `source_url` | URL | The page URL where the best email was discovered |
+| `source_type` | Single select | Options: `homepage`, `cheerio_contact`, `puppeteer_contact`, `domain_guess`, `none` |
+| `scrape_status` | Single select | Options: `Pending`, `Success`, `NoEmail`, `Failed` |
+| `email_confidence` | Number (integer) | 0–100 — confidence in the found email (mailto links score 85–95, regex-only 60–75, domain guesses 15) |
+| `contact_url_candidates` | Long text | JSON array of contact/about page URLs that were tried |
+| `last_scraped_at` | Date and time | Timestamp of the most recent scrape attempt |
+| `contact_method_assessment` | Single line text | Claude's assessment of the business's contact method: `email_only`, `phone_only`, `both`, `none`, or `booking_widget` |
+
+> **Note:** `homepage_email` and `contact_page_email` are only written when an email is actually found on the site. Domain guesses (e.g., `info@domain.com`) are passed to Claude for scoring context but are NOT written to these fields, since they are unverified. The `contact_method_assessment` field comes from Claude's analysis, not the scraper.
+
 ---
 
 ## HubSpot Setup
@@ -246,6 +264,95 @@ Add this field to your `Leads` table before activating the updated Workflow C:
 | Field Name | Field Type |
 |---|---|
 | `mobile_phone` | Phone number |
+
+---
+
+## Email Scraper Microservice
+
+Workflow B v2 includes a tiered email scraping layer that runs before Claude scoring. It extracts contact emails directly from business websites so that Claude has contact-friction signals baked in — a business with no discoverable email is a stronger automation candidate than one that publishes `info@domain.com`.
+
+### How the scraper works
+
+For each lead, Workflow B runs these steps in order, stopping as soon as a verified email is found:
+
+1. **Homepage regex scan** — emails extracted from raw HTML via `mailto:` links and text patterns. No external service, instant. Confidence: 85% (mailto) / 60% (text match).
+2. **Contact page crawl** — Workflow B extracts `/contact`, `/about`, `/team` links from the homepage and fetches the top candidate. Emails found here score 95% (mailto) / 75% (text). Classified as `cheerio_contact`.
+3. **Puppeteer render** — only triggered if the site is JS-heavy (very little text in the initial HTML + many script tags). A locally-hosted Puppeteer microservice fetches and renders the page, then the same regex extraction runs on the rendered HTML. Classified as `puppeteer_contact`.
+4. **Domain guess fallback** — if all three tiers find nothing, common patterns (`info@domain.com`, `contact@domain.com`, `office@domain.com`) are passed to Claude as unverified suggestions. These are **not** written to `homepage_email` or `contact_page_email`.
+
+### The scraper Docker service
+
+The Puppeteer tier runs as a small Node.js/Express container (`lead_pipeline_scraper`) inside the Docker network. n8n calls it at `http://scraper:3001/scrape` — it is never exposed to the public internet.
+
+**Files:**
+```
+lead-pipeline/
+└── scraper/
+    ├── Dockerfile       # Node.js 20-slim + Chromium system dependencies
+    ├── package.json     # express + puppeteer
+    └── index.js        # POST /scrape → { html, finalUrl, error }
+                         # GET  /health → { ok: true }
+```
+
+### Setup steps
+
+**1. Build the scraper container**
+
+On your VPS (after cloning the repo):
+
+```bash
+cd lead-pipeline
+docker compose build scraper
+docker compose up -d scraper
+```
+
+Verify it started:
+```bash
+docker ps | grep scraper
+# → lead_pipeline_scraper   Up X seconds
+```
+
+Test the health endpoint from within the Docker network (or from the VPS host — port is not mapped externally):
+```bash
+docker exec lead_pipeline_n8n wget -qO- http://scraper:3001/health
+# → {"ok":true}
+```
+
+**2. Add environment variables to `.env`**
+
+```dotenv
+# =============================================================================
+# Email Scraper Microservice
+# =============================================================================
+SCRAPER_URL=http://scraper:3001
+SCRAPER_TIMEOUT_MS=25000
+```
+
+Then restart n8n so it picks up the new variables:
+```bash
+docker compose up -d n8n
+```
+
+**3. Verify n8n can reach the scraper**
+
+In n8n UI, create a temporary manual HTTP Request node, call `GET http://scraper:3001/health`, and confirm you get `{"ok":true}` back. Delete the test node afterward.
+
+**4. Import `workflow_b_score_v2.json`**
+
+In n8n → **Settings → Import Workflow** → select `workflow_b_score_v2.json`. Deactivate the old `workflow_b_score.json` (or `workflow_b_score_updated.json` if that was your active version) before activating v2 — both workflows poll the same Airtable filter and running both would double-process records.
+
+### Resource requirements
+
+The Puppeteer container uses roughly 150–200 MB of RAM per active scrape (Chromium with images/media blocked). The `docker-compose.yml` sets a `mem_limit: 512m` on the service. On a 2 GB VPS this leaves ~1.3 GB for n8n and Postgres — sufficient for standard batch sizes of 25 leads.
+
+If you are on a 1 GB VPS, set `mem_limit: 256m` and add `--single-process` is already configured in `index.js`, which reduces Chromium's memory footprint at a slight stability cost. Puppeteer will be the fallback for JS-heavy sites only (typically 10–20% of leads).
+
+### Monitoring scrape results
+
+After the first v2 run, check Airtable:
+- Filter `scrape_status = Success` to see leads where an email was found
+- Filter `scrape_status = NoEmail` to see leads where all tiers failed — these are the highest-friction prospects
+- Filter `source_type = puppeteer_contact` to see how many leads required the JS render tier
 
 ---
 
@@ -357,7 +464,7 @@ A second, fully independent pipeline targeting real estate agents in affluent ma
 |---|---|---|---|
 | **A — Ingest** | `re_workflow_a_ingest.json` | Apify webhook (`re-apify-webhook`) | Ingests scraped agents → `Agents` table, deduplicates on phone + domain |
 | **B — Vulnerability Audit** | `re_workflow_b_audit.json` | Cron every 6 hours | Fetches agent site, detects live chat, finds + submits contact form, records `inquiry_sent_at` |
-| **C — Response Timer** | `re_workflow_c_response_timer.json` | Cron every 15 min + reply webhook | Fires SMS + email to agents who haven't replied within 15 min; separate webhook records replies |
+| **C — Response Timer** | `re_workflow_c_response_timer.json` | Cron every 15 min + reply/opt-out webhooks | Fires email to agents who haven't replied within 15 min; separate webhooks record replies and opt-out requests |
 | **D — AI Scoring** | `re_workflow_d_score.json` | Cron every 6 hours (offset +30 min) | Claude scores `Slow_Responder` agents; prompt tuned for RE CRM signals |
 | **E — Enrichment & Push** | `re_workflow_e_enrich_push.json` | Cron every 4 hours | Hunter.io + Apollo enrichment → HubSpot deal (`{Agent} — Live Chat + Lead Response`) |
 | **F — Maintenance** | `re_workflow_f_maintenance.json` | Cron Sunday 11:30pm | Archives agents stale 90+ days; weekly Slack report with slow-responder rate % |
@@ -405,7 +512,8 @@ Agents who reply within 15 minutes never reach `Slow_Responder` — they stay `A
 | `responded_at` | Date and time | When they replied (set by reply webhook) |
 | `response_time_minutes` | Number (integer) | Computed: `responded_at - inquiry_sent_at` |
 | `outreach_triggered` | Checkbox | True after Workflow C fires outreach |
-| `outreach_sent_at` | Date and time | When SMS/email was sent to agent |
+| `outreach_sent_at` | Date and time | When the outreach email was sent to agent |
+| `opted_out` | Checkbox | True if agent replied UNSUBSCRIBE — suppresses all future outreach |
 | `ai_score` | Number (integer) | Claude score 1–10 |
 | `ai_signals` | Long text | Comma-separated signals |
 | `ai_summary` | Long text | One-sentence explanation |
@@ -452,9 +560,6 @@ AIRTABLE_TABLE_RE_LEADS=RE_Leads
 TARGET_CITIES_RE=Scottsdale AZ,Paradise Valley AZ,Arcadia AZ
 
 INQUIRY_EMAIL_ALIAS=inquiry@yourdomain.com
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token
-TWILIO_FROM_NUMBER=+12025551234
 SENDGRID_API_KEY=SG.xxxxxxxxxx
 ```
 
@@ -498,19 +603,28 @@ This routes to **RE Workflow A** (separate path from the service-biz webhook `ap
 
 ---
 
-### Step 5 — Set up the reply webhook (Workflow C)
+### Step 5 — Set up the reply and opt-out webhooks (Workflow C)
 
-Workflow C includes a webhook endpoint at `https://YOUR_DOMAIN/webhook/re-reply-webhook`. Configure your email provider to POST inbound replies to this URL. When an agent replies to your inquiry email, the provider parses the reply and POSTs it here — Workflow C then matches the sender email to an `Agents` record and writes `responded_at` + `response_time_minutes`.
+Workflow C exposes two inbound webhook endpoints. Configure your email provider to POST inbound replies to both.
 
-**SendGrid Inbound Parse setup:**
+#### Reply webhook — `re-reply-webhook`
+
+When an agent replies to your inquiry email, the provider parses the reply and POSTs it here — Workflow C matches the sender email to an `Agents` record and writes `responded_at` + `response_time_minutes`.
+
+#### Opt-out webhook — `re-optout-webhook` (CAN-SPAM required)
+
+When a recipient replies with **"UNSUBSCRIBE"** in the subject line, the provider POSTs here — Workflow C sets `opted_out = true` on their `Agents` record. The fetch query in Workflow C's scheduled flow excludes opted-out agents, so they will never receive outreach again. This opt-out mechanism is required by CAN-SPAM (15 USC § 7704(a)(3)–(4)) and must be honored within 10 business days.
+
+**SendGrid Inbound Parse setup (configure once for both webhooks):**
 1. SendGrid → Settings → Inbound Parse → **Add Host & URL**
 2. Receiving domain: the domain of `INQUIRY_EMAIL_ALIAS` (e.g., `yourdomain.com`)
 3. Destination URL: `https://YOUR_DOMAIN/webhook/re-reply-webhook`
-4. Check **POST the raw, full MIME message**
+4. Add a second rule pointing to `https://YOUR_DOMAIN/webhook/re-optout-webhook`
+5. Check **POST the raw, full MIME message** on both rules
 
-**Mailgun / Postmark:** both have equivalent "inbound routes" that POST the parsed email as JSON — point them at the same webhook URL.
+**Mailgun / Postmark:** both have equivalent "inbound routes" — create two routes, one per webhook URL, differentiated by subject-line matching if your provider supports it (e.g., subject contains "UNSUBSCRIBE" → opt-out URL; all others → reply URL).
 
-> If you don't set this up, reply detection simply won't work — but everything else (audit, outreach trigger, scoring, CRM push) continues fine. You can manually set `responded_at` on any `Agents` record to capture a reply.
+> If the reply webhook is not configured, reply detection won't work but everything else continues. The opt-out webhook is more important from a compliance standpoint — if you can only configure one, configure opt-out first.
 
 ---
 
@@ -565,18 +679,19 @@ If the website can't be fetched, the agent is still marked `Audited` with `has_l
 
 ### How the Response Timer works (Workflow C)
 
-Runs every 15 minutes. For each `Audited` agent where `inquiry_sent_at` is set and `outreach_triggered = false`:
+Runs every 15 minutes. For each `Audited` agent where `inquiry_sent_at` is set, `outreach_triggered = false`, and `opted_out != true`:
 
 - If **> 15 minutes have elapsed** since `inquiry_sent_at`:
-  - Sends an SMS via Twilio to `mobile_phone` (falls back to `phone`)
-  - Sends an email via SendGrid to `contact_email` (if enriched — runs after Workflow A, not E, so enrichment may not have run yet; email outreach fires later if the email is populated)
+  - Sends an email via SendGrid to `contact_email`
   - Sets `outreach_triggered = true`, `outreach_sent_at`, `status = Slow_Responder`
   - Sends a Slack alert
 
-**The outreach message** (customizable in Workflow C's "Build Outreach Message" node):
-> *"Hi [Name], I noticed your website doesn't have live chat — most home buyers decide on an agent within 15 minutes of reaching out. I help agents set this up in under 24 hours, so you never lose a lead to slow response time again. Worth a quick call?"*
+**CAN-SPAM compliance:** The outreach email includes a physical business address and unsubscribe instructions in the footer, and a `List-Unsubscribe` header so email clients show a one-click unsubscribe button. If a recipient replies with "UNSUBSCRIBE" in the subject, the opt-out webhook (see Step 5) sets `opted_out = true` and suppresses all future outreach to that address. Cold email outreach is lawful under CAN-SPAM without prior consent; SMS outreach to cold contacts is not (TCPA requires prior express written consent), so SMS is not used.
 
-Edit the `smsBody`, `emailSubject`, and `emailBody` variables in the **Build Outreach Message** Code node to fit your voice and offer.
+**The outreach message** (customizable in Workflow C's "Build Outreach Message" node):
+> *"Hi [Name], I reached out through your website recently and noticed you don't have live chat set up. Research shows that home buyers who don't hear back within 15 minutes are 10x less likely to convert. I help real estate agents set up instant live chat and automated follow-up in under 24 hours. Would you be open to a quick 10-minute call this week?"*
+
+Edit the `emailSubject` and `emailBody` variables in the **Build Outreach Message** Code node to fit your voice and offer. The unsubscribe footer and physical address in the email body are legally required — do not remove them. Replace `[YOUR BUSINESS NAME] | [YOUR PHYSICAL ADDRESS, CITY, STATE, ZIP]` with your real address before activating.
 
 ---
 
@@ -606,15 +721,15 @@ Airtable views to set up:
 - Verify manually: view source on the agent's website and search for `<form`
 - Some Wordpress themes render forms via shortcodes that expand to `<form>` in HTML — these should be detected. React/Next.js single-page apps will not.
 
-**Outreach fires but Twilio returns an error**
-- Check that `TWILIO_FROM_NUMBER` is a valid Twilio number with SMS capability
-- Check that the agent's phone number is a US mobile (Twilio can't text landlines)
-- Twilio errors appear in the n8n Execution log for Workflow C
-
 **Workflow C sends outreach to the same agent twice**
 - `outreach_triggered` is set to `true` after the first send, which filters out the agent on subsequent runs
 - If you see a double-send, check that the Airtable PATCH in "Update Agent — Slow Responder" succeeded — if it failed (network error), the agent stays `outreach_triggered = false` and can retrigger
-- Add an n8n execution filter: check n8n execution logs for PATCH errors on that record
+- Check n8n execution logs for PATCH errors on that record
+
+**Opted-out agent still receiving email**
+- Verify the `opted_out` checkbox field exists on the `Agents` table — the fetch filter silently ignores the clause if the field doesn't exist
+- Check the opt-out webhook (`re-optout-webhook`) is registered in n8n and that your email provider is configured to POST to it
+- Manually set `opted_out = true` on the record in Airtable as an immediate fix
 
 **`response_time_minutes` is never populated**
 - The reply webhook (`re-reply-webhook`) is not configured or not receiving POSTs
@@ -664,6 +779,9 @@ Filter and view:
 - `status = Scored` AND `ai_score >= 6` → leads ready for enrichment
 - `status = Pushed` → closed loop, in HubSpot
 - `ai_score = -1` → Claude API errors (check Anthropic console for quota issues)
+- `scrape_status = NoEmail` AND `ai_score >= 6` → highest-friction prospects (no discoverable contact method + high automation need)
+- `source_type = puppeteer_contact` → sites that required JS rendering to find an email
+- `contact_method_assessment = phone_only` → businesses that only list a phone number (prime outreach targets)
 
 ---
 
@@ -705,7 +823,33 @@ Airtable's Single select field rejects values that aren't already in its predefi
 
 **Fix:** In Airtable, open the `Leads` table → click the `category` column header → **Customize field** → change type to **Single line text**. No existing data is lost.
 
-### 6. n8n UI is unreachable after setup
+### 6. Scraper container fails to start or Puppeteer crashes
+
+**Symptom:** `docker ps` shows `lead_pipeline_scraper` as `Exited` or it restarts in a loop.
+
+**Cause — missing Chromium system libraries:** The `Dockerfile` installs them all, but if the build was interrupted mid-layer, some may be missing.
+
+**Fix:**
+```bash
+cd lead-pipeline
+docker compose build --no-cache scraper
+docker compose up -d scraper
+docker logs lead_pipeline_scraper --tail=50
+```
+
+**Symptom:** Puppeteer scrape calls return `{ error: "... Protocol error (Target.createTarget): Target closed." }` or memory errors in `docker stats`.
+
+**Cause:** The container hit its memory limit (512 MB default). The `--single-process` flag in `index.js` reduces Chromium RAM usage but on very small VPS instances (1 GB total) it can still OOM.
+
+**Fix:** Reduce the `mem_limit` value in `docker-compose.yml` scraper service to `384m` and add `--disable-extensions` to the Puppeteer launch args in `scraper/index.js`. Alternatively, accept that Puppeteer will fail for some JS-heavy sites — the workflow handles this via `continueErrorOutput` and falls back to domain email guesses without interrupting scoring.
+
+**Symptom:** `homepage_email` and `contact_page_email` are always blank despite sites clearly showing emails.
+
+**Cause:** Email regex filtering is removing valid addresses (e.g., email contains a `.png`-like string, or the domain is in the noise filter list).
+
+**Fix:** In n8n, open `workflow_b_score_v2` → **Extract Emails — Homepage** node → add a `console.log(allEmails)` line temporarily and re-run on a pinned record to see what the regex is extracting before filters apply.
+
+### 7. n8n UI is unreachable after setup
 
 **Cause:** SSL certificate not yet installed, or Nginx can't find the cert files.
 - Before running certbot: access n8n directly on port 5678: `http://YOUR_IP:5678`

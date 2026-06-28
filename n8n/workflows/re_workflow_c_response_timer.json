@@ -21,7 +21,7 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "filterByFormula", "value": "AND({status}='Audited',{inquiry_sent_at}!='',{outreach_triggered}=FALSE())" },
+            { "name": "filterByFormula", "value": "AND({status}='Audited',{inquiry_sent_at}!='',{outreach_triggered}=FALSE(),{opted_out}!=TRUE())" },
             { "name": "sort[0][field]", "value": "inquiry_sent_at" },
             { "name": "sort[0][direction]", "value": "asc" },
             { "name": "maxRecords", "value": "50" }
@@ -58,7 +58,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const records = $input.item.json.records || [];\nconst now = Date.now();\nconst THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes\n\n// Filter to agents whose inquiry was sent >15 min ago and haven't responded.\nreturn records\n  .map(r => {\n    const sentAt = r.fields.inquiry_sent_at ? new Date(r.fields.inquiry_sent_at).getTime() : null;\n    const elapsed = sentAt ? now - sentAt : 0;\n    return {\n      json: {\n        record_id: r.id,\n        agent_name: r.fields.agent_name || '',\n        agency_name: r.fields.agency_name || '',\n        phone: r.fields.phone || '',\n        mobile_phone: r.fields.mobile_phone || '',\n        contact_email: r.fields.contact_email || '',\n        city: r.fields.city || '',\n        state: r.fields.state || '',\n        has_live_chat: r.fields.has_live_chat || false,\n        inquiry_sent_at: r.fields.inquiry_sent_at || null,\n        elapsed_minutes: Math.floor(elapsed / 60000),\n        is_slow_responder: elapsed >= THRESHOLD_MS\n      }\n    };\n  })\n  .filter(item => item.json.is_slow_responder);"
+        "jsCode": "const records = $input.item.json.records || [];\nconst now = Date.now();\nconst THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes\n\n// Filter to agents whose inquiry was sent >15 min ago and haven't responded.\nreturn records\n  .map(r => {\n    const sentAt = r.fields.inquiry_sent_at ? new Date(r.fields.inquiry_sent_at).getTime() : null;\n    const elapsed = sentAt ? now - sentAt : 0;\n    return {\n      json: {\n        record_id: r.id,\n        agent_name: r.fields.agent_name || '',\n        agency_name: r.fields.agency_name || '',\n        contact_email: r.fields.contact_email || '',\n        city: r.fields.city || '',\n        state: r.fields.state || '',\n        has_live_chat: r.fields.has_live_chat || false,\n        inquiry_sent_at: r.fields.inquiry_sent_at || null,\n        elapsed_minutes: Math.floor(elapsed / 60000),\n        is_slow_responder: elapsed >= THRESHOLD_MS\n      }\n    };\n  })\n  .filter(item => item.json.is_slow_responder);"
       },
       "id": "re_c_check_elapsed",
       "name": "Check Elapsed Time",
@@ -86,7 +86,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build the outreach message.\nconst r = $input.item.json;\nconst firstName = r.agent_name ? r.agent_name.split(' ')[0] : 'there';\n\nconst smsBody = `Hi ${firstName}, I noticed your website doesn't have live chat — most home buyers decide on an agent within 15 minutes of reaching out. I help agents set this up in under 24 hours. Worth a quick call?`;\n\nconst emailSubject = `Quick question about your lead response time, ${firstName}`;\nconst emailBody = `Hi ${firstName},\n\nI reached out through your website recently and noticed you don't have live chat set up. Research shows that home buyers who don't hear back within 15 minutes are 10x less likely to convert.\n\nI help real estate agents set up instant live chat and automated follow-up in under 24 hours, so you never lose a lead to slow response time again.\n\nWould you be open to a quick 10-minute call this week?\n\nBest,\nAlex`;\n\nreturn [{ json: { ...r, smsBody, emailSubject, emailBody, outreach_sent_at: new Date().toISOString() } }];"
+        "jsCode": "// Build the outreach email.\n// SMS has been removed — sending marketing texts to cold contacts without prior\n// express written consent is a TCPA violation.\nconst r = $input.item.json;\nconst firstName = r.agent_name ? r.agent_name.split(' ')[0] : 'there';\n\nconst emailSubject = `${firstName} — a quick note about your website's lead response time`;\n\nconst emailBody = `Hi ${firstName},\n\nI reached out through your website recently and noticed you don't have live chat set up. Research shows that home buyers who don't hear back within 15 minutes are 10x less likely to convert.\n\nI help real estate agents set up instant live chat and automated follow-up in under 24 hours, so you never lose a lead to slow response time again.\n\nWould you be open to a quick 10-minute call this week?\n\nBest,\nSean\n\n---\nThis is a commercial email. To unsubscribe, reply with \"UNSUBSCRIBE\" in the subject line and you will not be contacted again.\n\nTaskRiver LLC | 1500 N Grant St Ste N Denver, CO 80203`;\n\nreturn [{ json: { ...r, emailSubject, emailBody, outreach_sent_at: new Date().toISOString() } }];"
       },
       "id": "re_c_build_outreach",
       "name": "Build Outreach Message",
@@ -96,58 +96,14 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {},
-          "conditions": [{
-            "leftValue": "={{ $json.mobile_phone || $json.phone }}",
-            "rightValue": "",
-            "operator": { "type": "string", "operation": "notEmpty" }
-          }],
-          "combinator": "and"
-        }
-      },
-      "id": "re_c_if_has_phone",
-      "name": "IF — Has Phone for SMS?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [1520, 120]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://api.twilio.com/2010-04-01/Accounts/{{ $env.TWILIO_ACCOUNT_SID }}/Messages.json",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBasicAuth",
-        "sendBody": true,
-        "contentType": "form-urlencoded",
-        "bodyParameters": {
-          "parameters": [
-            { "name": "From", "value": "={{ $env.TWILIO_FROM_NUMBER }}" },
-            { "name": "To", "value": "={{ $json.mobile_phone || $json.phone }}" },
-            { "name": "Body", "value": "={{ $json.smsBody }}" }
-          ]
-        },
-        "options": { "timeout": 10000 }
-      },
-      "id": "re_c_send_sms",
-      "name": "Send SMS via Twilio",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [1740, 40],
-      "onError": "continueErrorOutput",
-      "credentials": {
-        "httpBasicAuth": { "id": "twilio_basic_auth", "name": "Twilio Basic Auth" }
-      }
-    },
-    {
-      "parameters": {
         "method": "POST",
         "url": "https://api.sendgrid.com/v3/mail/send",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             { "name": "Authorization", "value": "=Bearer {{ $env.SENDGRID_API_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "List-Unsubscribe", "value": "=<mailto:{{ $env.INQUIRY_EMAIL_ALIAS }}?subject=UNSUBSCRIBE>" }
           ]
         },
         "sendBody": true,
@@ -159,7 +115,7 @@
       "name": "Send Email via SendGrid",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1740, 200],
+      "position": [1520, 120],
       "onError": "continueErrorOutput"
     },
     {
@@ -177,20 +133,20 @@
       "name": "Update Agent — Slow Responder",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1960, 120],
+      "position": [1740, 120],
       "credentials": {
         "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
       }
     },
     {
       "parameters": {
-        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nconst r = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `⏱️ *RE Outreach Triggered*\\n${r.agent_name} (${r.agency_name || 'Independent'})\\n📍 ${r.city}, ${r.state}\\n⏱ ${r.elapsed_minutes} min response time\\n📲 SMS + Email sent` } } }];"
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nconst r = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `⏱️ *RE Outreach Triggered*\\n${r.agent_name} (${r.agency_name || 'Independent'})\\n📍 ${r.city}, ${r.state}\\n⏱ ${r.elapsed_minutes} min response time\\n📧 Email sent` } } }];"
       },
       "id": "re_c_slack_msg",
       "name": "Build Slack Alert",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2180, 120]
+      "position": [1960, 120]
     },
     {
       "parameters": {
@@ -205,7 +161,7 @@
       "name": "Slack — Outreach Sent",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [2400, 120]
+      "position": [2180, 120]
     },
     {
       "parameters": {
@@ -217,7 +173,7 @@
       "name": "Webhook — Reply Received",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [200, 600],
+      "position": [200, 500],
       "webhookId": "re-reply-received-webhook"
     },
     {
@@ -228,7 +184,7 @@
       "name": "Parse Reply Sender",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 600]
+      "position": [420, 500]
     },
     {
       "parameters": {
@@ -250,7 +206,7 @@
       "name": "Lookup Agent by Email",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [640, 600],
+      "position": [640, 500],
       "credentials": {
         "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
       }
@@ -263,7 +219,7 @@
       "name": "Compute Response Time",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [860, 600]
+      "position": [860, 500]
     },
     {
       "parameters": {
@@ -280,7 +236,84 @@
       "name": "Mark Agent Replied",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1080, 600],
+      "position": [1080, 500],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "re-optout-webhook",
+        "options": {}
+      },
+      "id": "re_c_optout_webhook",
+      "name": "Webhook — Opt-Out Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 720],
+      "webhookId": "re-optout-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Triggered by SendGrid inbound parse when a recipient replies with\n// \"UNSUBSCRIBE\" in the subject line (per CAN-SPAM §7704(a)(3)).\n//\n// Expected payload fields (SendGrid Inbound Parse format):\n//   from: sender's email address\n//   subject: email subject\nconst body = $input.item.json;\nconst fromEmail = body.from || body.sender || '';\nconst subject = body.subject || '';\n\nif (!fromEmail) throw new Error('No sender email in opt-out webhook payload');\n\n// Only process genuine unsubscribe requests.\nif (!subject.toLowerCase().includes('unsubscribe')) return [];\n\nreturn [{ json: { from_email: fromEmail, opted_out_at: new Date().toISOString() } }];"
+      },
+      "id": "re_c_parse_optout",
+      "name": "Parse Opt-Out Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 720]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filterByFormula", "value": "={contact_email}='{{ $json.from_email }}'" },
+            { "name": "maxRecords", "value": "1" },
+            { "name": "fields[]", "value": "contact_email" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "re_c_lookup_optout_agent",
+      "name": "Lookup Agent — Opt-Out",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 720],
+      "credentials": {
+        "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nif (records.length === 0) return [];\nreturn [{ json: { record_id: records[0].id } }];"
+      },
+      "id": "re_c_extract_optout_record",
+      "name": "Extract Opt-Out Record ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 720]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID_RE + '/' + $env.AIRTABLE_TABLE_AGENTS + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { opted_out: true } }) }}",
+        "options": {}
+      },
+      "id": "re_c_mark_optout",
+      "name": "Mark Agent Opted Out",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 720],
       "credentials": {
         "airtableTokenApi": { "id": "z6xuZwjlxtrjZ38L", "name": "Airtable Personal Access Token account 2" }
       }
@@ -291,7 +324,7 @@
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [200, 820]
+      "position": [200, 940]
     },
     {
       "parameters": {
@@ -301,7 +334,7 @@
       "name": "Format Error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 820]
+      "position": [420, 940]
     },
     {
       "parameters": {
@@ -316,7 +349,7 @@
       "name": "Slack — Error Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [640, 820]
+      "position": [640, 940]
     }
   ],
   "connections": {
@@ -335,21 +368,23 @@
         []
       ]
     },
-    "Build Outreach Message": { "main": [[{ "node": "IF — Has Phone for SMS?", "type": "main", "index": 0 }]] },
-    "IF — Has Phone for SMS?": {
+    "Build Outreach Message": { "main": [[{ "node": "Send Email via SendGrid", "type": "main", "index": 0 }]] },
+    "Send Email via SendGrid": {
       "main": [
-        [{ "node": "Send SMS via Twilio", "type": "main", "index": 0 }],
-        [{ "node": "Send Email via SendGrid", "type": "main", "index": 0 }]
+        [{ "node": "Update Agent — Slow Responder", "type": "main", "index": 0 }],
+        [{ "node": "Update Agent — Slow Responder", "type": "main", "index": 0 }]
       ]
     },
-    "Send SMS via Twilio": { "main": [[{ "node": "Update Agent — Slow Responder", "type": "main", "index": 0 }], [{ "node": "Update Agent — Slow Responder", "type": "main", "index": 0 }]] },
-    "Send Email via SendGrid": { "main": [[{ "node": "Update Agent — Slow Responder", "type": "main", "index": 0 }], [{ "node": "Update Agent — Slow Responder", "type": "main", "index": 0 }]] },
     "Update Agent — Slow Responder": { "main": [[{ "node": "Build Slack Alert", "type": "main", "index": 0 }]] },
     "Build Slack Alert": { "main": [[{ "node": "Slack — Outreach Sent", "type": "main", "index": 0 }]] },
     "Webhook — Reply Received": { "main": [[{ "node": "Parse Reply Sender", "type": "main", "index": 0 }]] },
     "Parse Reply Sender": { "main": [[{ "node": "Lookup Agent by Email", "type": "main", "index": 0 }]] },
     "Lookup Agent by Email": { "main": [[{ "node": "Compute Response Time", "type": "main", "index": 0 }]] },
     "Compute Response Time": { "main": [[{ "node": "Mark Agent Replied", "type": "main", "index": 0 }]] },
+    "Webhook — Opt-Out Request": { "main": [[{ "node": "Parse Opt-Out Request", "type": "main", "index": 0 }]] },
+    "Parse Opt-Out Request": { "main": [[{ "node": "Lookup Agent — Opt-Out", "type": "main", "index": 0 }]] },
+    "Lookup Agent — Opt-Out": { "main": [[{ "node": "Extract Opt-Out Record ID", "type": "main", "index": 0 }]] },
+    "Extract Opt-Out Record ID": { "main": [[{ "node": "Mark Agent Opted Out", "type": "main", "index": 0 }]] },
     "Error Trigger": { "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]] },
     "Format Error": { "main": [[{ "node": "Slack — Error Alert", "type": "main", "index": 0 }]] }
   },

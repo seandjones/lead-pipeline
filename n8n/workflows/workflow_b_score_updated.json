@@ -1,0 +1,870 @@
+{
+  "name": "workflow_b_score_updated",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "200ab5c3-7acf-4c7a-a7ca-56500f8aeb14",
+      "name": "Schedule — Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1536,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "filterByFormula",
+              "value": "AND({status}='Raw',{website_fetch_status}='Pending')"
+            },
+            {
+              "name": "sort[0][field]",
+              "value": "date_added"
+            },
+            {
+              "name": "sort[0][direction]",
+              "value": "asc"
+            },
+            {
+              "name": "maxRecords",
+              "value": "25"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "707ccf65-b348-4795-9341-1778488f2b75",
+      "name": "Fetch Unscored Records",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1312,
+        32
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.item.json.records || [];\nreturn records.map(r => ({\n  json: {\n    record_id: r.id,\n    business_name: r.fields.business_name || '',\n    website: r.fields.website || '',\n    domain: r.fields.domain || r.fields.website.split('/')[2] || '' ,\n    phone: r.fields.phone || '',\n    category: r.fields.category || '',\n    google_rating: r.fields.google_rating || null,\n    review_count: r.fields.review_count || 0\n  }\n}));"
+      },
+      "id": "1e4e0a99-51ba-405a-9af6-3b0217af6617",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -864,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            },
+            {
+              "name": "Accept-Encoding",
+              "value": "gzip, deflate, br"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "redirect": {
+            "redirect": {
+              "maxRedirects": 5
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "1a8bf575-d0df-4de8-a11d-f10da93e1ac0",
+      "name": "Fetch Website Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -640,
+        32
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME + '/' + $('Split Into Items').item.json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { website_fetch_status: 'Failed', status: 'Scored', ai_score: 0, ai_signals: 'Website fetch failed', ai_summary: 'Could not retrieve website content', date_scored: new Date().toISOString().split('T')[0] } }) }}",
+        "options": {}
+      },
+      "id": "0b5ab951-1e53-4ec2-ba0a-97ee29f01aa5",
+      "name": "Mark Fetch Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -416,
+        128
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\n// Detect bot-wall / parked-domain / thin-content responses before they reach Claude.\n// These are strings that appear on interstitial pages, not on real business sites.\nconst JUNK_PATTERNS = [\n  /this domain is (for sale|parked|registered)/i,\n  /parked (by|with|at|on)/i,\n  /godaddy\\.com|namecheap\\.com|sedoparking\\.com|hugedomains\\.com/i,\n  /under construction/i,\n  /coming soon/i,\n  /cf-browser-verification|enable javascript and cookies to continue|checking your browser/i,\n  /ddos-guard|cloudflare ray id/i,\n  /access denied|403 forbidden|not found|404 error/i,\n  /^\\s*$/,\n];\n\nconst isThin = text.replace(/\\s/g, '').length < 150;\nconst isJunk = JUNK_PATTERNS.some(p => p.test(text));\n\nconst record = $('Split Into Items').item.json;\n\nif (isThin || isJunk) {\n  // Surface the raw HTML length so the retry node can log it\n  return { json: { ...record, website_text: text, website_fetch_status: 'ThinContent', raw_html_length: htmlStr.length } };\n}\n\nreturn { json: { ...record, website_text: text, website_fetch_status: 'Success' } };"
+      },
+      "id": "0891a160-3029-4d9d-a272-63bc3c0d0d5d",
+      "name": "Extract Text from HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -416,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.website_fetch_status }}",
+              "rightValue": "ThinContent",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d5487461-f833-4f18-a112-13cc239b5cb8",
+      "name": "IF — Thin Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try fetching with www. prefix if the original URL omitted it, or vice-versa.\n// This catches sites that only respond on one canonical form.\nconst record = $input.item.json;\nlet altUrl = record.website || '';\ntry {\n  const u = new URL(altUrl);\n  if (u.hostname.startsWith('www.')) {\n    u.hostname = u.hostname.replace(/^www\\./, '');\n  } else {\n    u.hostname = 'www.' + u.hostname;\n  }\n  altUrl = u.toString();\n} catch(e) {}\nreturn [{ json: { ...record, alt_website: altUrl } }];"
+      },
+      "id": "0f8b460f-2145-43af-982b-845f2e023cb8",
+      "name": "Build Alt URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.alt_website }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "redirect": {
+            "redirect": {
+              "maxRedirects": 5
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "debe3eb4-cfc6-4d95-8a3b-fb34bc868112",
+      "name": "Fetch Alt URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        256,
+        -128
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge alt-fetch result back with the original record.\n// Use whichever text is longer (alt vs. original thin text).\nconst html = $input.item.json.data || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3000);\n\nconst prevRecord = $('Build Alt URL').item.json;\nconst originalText = prevRecord.website_text || '';\n\n// Prefer whichever version has more content\nconst finalText = text.length > originalText.length ? text : originalText;\nconst fetchStatus = finalText.replace(/\\s/g, '').length >= 150 ? 'Success' : 'ThinContent';\n\nreturn [{ json: { ...prevRecord, website_text: finalText, website_fetch_status: fetchStatus } }];"
+      },
+      "id": "b82f3620-2286-47bf-bd61-62365e80d12c",
+      "name": "Merge Alt Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record = $input.item.json;\n\nconst systemPrompt = `You are a lead qualification specialist for an AI automation agency that sells workflow automation to small trades businesses (HVAC, plumbing, roofing contractors).\nYour job is to analyze a business website and determine how likely that business is to need and benefit from automation services.\n\nHIGH-value targets are businesses that:\n- Have no online booking or scheduling system\n- List only a phone number as their contact method with no form or chat\n- Have vague, sparse service descriptions suggesting no structured processes\n- Make no mention of software, apps, CRM, or customer portals\n- Have emergency/24-7 claims but no automated system to back it up\n- Show signs of being run manually (e.g. \"call for a quote\", \"we'll get back to you\")\n- Have generic, template-looking websites with minimal custom content\n\nLOW-value targets are businesses that:\n- Mention ServiceTitan, Housecall Pro, Jobber, or other trades software\n- Have an embedded booking widget or online scheduling\n- Actively advertise their use of technology as a selling point\n- Are clearly a franchise or large chain (likely already automated)\n\nYou must return ONLY a valid JSON object. No preamble, no explanation, no markdown.`;\n\nconst userPrompt = `Analyze this trades business website and score it.\n\nBusiness: ${record.business_name}\nCategory: ${record.category || 'Unknown'}\nWebsite URL: ${record.website}\n\nWebsite Content:\n\"\"\"\n${record.website_text || '(no content retrieved)'}\n\"\"\"\n\nReturn this exact JSON structure:\n{\n  \"score\": <integer 1-10>,\n  \"signals\": [<array of strings, each describing a specific signal found, max 5>],\n  \"summary\": \"<one sentence explaining the score>\",\n  \"has_booking_system\": <boolean>,\n  \"mentions_software\": <boolean>,\n  \"software_mentioned\": \"<name of software if found, else null>\"\n}`;\n\nreturn { json: { ...record, claude_request_body: { model: 'claude-sonnet-4-5', max_tokens: 500, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] } } };"
+      },
+      "id": "3ba6499d-0f3f-47f0-b5ab-e9c2c47ea2be",
+      "name": "Build Claude Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request_body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "756716a7-a02a-4b5c-a29f-393e69b822b9",
+      "name": "Call Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        928,
+        -64
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "b36e81f4-2387-4e2c-a06d-378ea13762bc",
+      "name": "Wait 5s Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1152,
+        16
+      ],
+      "webhookId": "cc023f32-ae0d-43e0-ba28-425cd80cd1e6"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Claude Prompt').item.json.claude_request_body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "e2d2fe9b-62ae-475c-9c31-0dddd88f79f1",
+      "name": "Call Claude API — Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1376,
+        16
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prevRecord = $('Build Claude Prompt').item.json;\nreturn [{ json: { ...prevRecord, ai_score: -1, ai_signals: 'Claude API Error — both attempts failed', ai_summary: 'Scoring unavailable due to API error', website_fetch_status: prevRecord.website_fetch_status || 'Success' } }];"
+      },
+      "id": "b70721eb-7c8b-48bd-a39a-5154706bf77c",
+      "name": "Claude Error Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const response = $input.item.json;\nconst content = response.content?.[0]?.text || '';\nconst prevRecord = $('Build Claude Prompt').item.json;\n\nlet parsed;\ntry {\n  const clean = content.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch(e) {\n  parsed = { score: 0, signals: ['Parse error — Claude returned invalid JSON'], summary: 'Failed to parse Claude response', has_booking_system: null, mentions_software: null, software_mentioned: null };\n}\n\nreturn { json: { ...prevRecord, ai_score: parsed.score || 0, ai_signals: Array.isArray(parsed.signals) ? parsed.signals.join(', ') : '', ai_summary: parsed.summary || '', has_booking_system: parsed.has_booking_system, mentions_software: parsed.mentions_software, software_mentioned: parsed.software_mentioned, website_fetch_status: prevRecord.website_fetch_status || 'Success' } };"
+      },
+      "id": "0a555d5d-b771-4233-9004-385a843e87e1",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "eeff7d6a-46ae-484d-9cc3-0573266f2980",
+      "name": "Wait 2s — Rate Limit",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1824,
+        -160
+      ],
+      "webhookId": "5e160f65-52e1-4907-b0fe-6ce59a6cc3be"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.airtable.com/v0/' + $env.AIRTABLE_BASE_ID + '/' + $env.AIRTABLE_TABLE_NAME + '/' + $json.record_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { ai_score: $json.ai_score, ai_signals: $json.ai_signals, ai_summary: $json.ai_summary, website_fetch_status: $json.website_fetch_status, status: 'Scored', date_scored: new Date().toISOString().split('T')[0], domain: $json.domain } }) }}",
+        "options": {}
+      },
+      "id": "a02cbbc1-d823-44b9-bc73-aa14f8ba800d",
+      "name": "Update Airtable Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2048,
+        -64
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "z6xuZwjlxtrjZ38L",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// This node runs once per item — aggregate node would be needed for a true\n// per-batch Slack message. For now we suppress all but the last item using\n// n8n's item index to avoid 25 pings for 25 records.\n// A cleaner solution is to add a Summarize node before this.\nconst slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: { skipped: true } }];\nreturn [{ json: { slackUrl, slackBody: { text: '📊 *Workflow B — Record Scored*\\nAI scoring run in progress. Check Airtable Scored records for updated ai_score values.' } } }];"
+      },
+      "id": "f21e2ad5-c12e-436a-8028-8bf7f9864433",
+      "name": "Build Completion Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.data[0].slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.data[0].slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "ac8862cd-4a78-4408-8ff3-338f33351145",
+      "name": "Slack — Scoring Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2720,
+        -64
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1d6f71cd-4a42-45c0-917a-ca3a8cc451f0",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1536,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const slackUrl = $env.SLACK_WEBHOOK_URL;\nif (!slackUrl) return [{ json: {} }];\nconst err = $input.item.json;\nreturn [{ json: { slackUrl, slackBody: { text: `🚨 *Workflow B Error*\\n${err.execution?.error?.message || 'Unknown error'}` } } }];"
+      },
+      "id": "e6bf0225-c8e7-48ea-a14d-9f8930cc81cb",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1312,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slackBody.text }) }}",
+        "options": {}
+      },
+      "id": "1616f746-1453-4173-83b2-4b3289129cf9",
+      "name": "Slack — Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1088,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c8f7df89-5e5b-45f4-9928-34f9c8fceb90",
+              "leftValue": "={{ Array.isArray($json.records) && $json.records.length > 0  }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1088,
+        32
+      ],
+      "id": "a3dbd475-3358-430e-a6c8-66b99bf017cc",
+      "name": "If -- Records Found?"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2496,
+        -64
+      ],
+      "id": "14fac829-f39d-4db1-8f81-111e456534fe",
+      "name": "Aggregate"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule — Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Fetch Unscored Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Unscored Records": {
+      "main": [
+        [
+          {
+            "node": "If -- Records Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Items": {
+      "main": [
+        [
+          {
+            "node": "Fetch Website Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Website Content": {
+      "main": [
+        [
+          {
+            "node": "Extract Text from HTML",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Fetch Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text from HTML": {
+      "main": [
+        [
+          {
+            "node": "IF — Thin Content?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Thin Content?": {
+      "main": [
+        [
+          {
+            "node": "Build Alt URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Claude Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alt URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch Alt URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Alt URL": {
+      "main": [
+        [
+          {
+            "node": "Merge Alt Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Claude Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Alt Content": {
+      "main": [
+        [
+          {
+            "node": "Build Claude Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Claude Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Claude API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Claude API": {
+      "main": [
+        [
+          {
+            "node": "Parse Claude Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 5s Before Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 5s Before Retry": {
+      "main": [
+        [
+          {
+            "node": "Call Claude API — Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Claude API — Retry": {
+      "main": [
+        [
+          {
+            "node": "Parse Claude Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Claude Error Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Error Fallback": {
+      "main": [
+        [
+          {
+            "node": "Update Airtable Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claude Response": {
+      "main": [
+        [
+          {
+            "node": "Wait 2s — Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2s — Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "Update Airtable Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Airtable Record": {
+      "main": [
+        [
+          {
+            "node": "Build Completion Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Completion Message": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Slack — Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If -- Records Found?": {
+      "main": [
+        [
+          {
+            "node": "Split Into Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Slack — Scoring Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "TOWaGImkZCSVApoX",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "445fee9c-9d66-4d09-a12a-9b57e141b50c",
+  "meta": {
+    "instanceId": "8144db7907c816170629971836b96cd89a9c228a0e6f7a76bd886fc19afc627f"
+  },
+  "nodeGroups": [],
+  "id": "TOWaGImkZCSVApoX",
+  "tags": []
+}
